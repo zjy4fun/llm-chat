@@ -1,0 +1,7 @@
+node_modules
+.pnpm-store
+server/dist
+web/dist
+*.tsbuildinfo
+.env
+server/.env

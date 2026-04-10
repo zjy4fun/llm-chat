@@ -1,30 +1,29 @@
 # llm-chat
 
-一个最小可运行的 **LLM Chat 全链路 Demo（TypeScript）**。
+A minimal, full-stack **LLM Chat demo** built with TypeScript end-to-end.
 
-- 前端：React + Vite + TS
-- 后端：Express + TS
-- Provider：OpenAI 兼容接口（通过 `LLM_BASE_URL` 切换三方）
-- 支持：stream（SSE） / non-stream（JSON）
+- **Frontend:** React + Vite + TypeScript
+- **Backend:** Express + TypeScript
+- **Provider:** OpenAI-compatible API (switch providers via `LLM_BASE_URL`)
+- **Modes:** Stream (SSE) / Non-stream (JSON)
 
-## 1. 快速启动
+## Quick Start
 
 ```bash
-cd ~/projects/llm-chat
 pnpm install
 cp server/.env.example server/.env
-# 编辑 server/.env 填入 LLM_API_KEY，必要时改 LLM_BASE_URL
+# Edit server/.env — set LLM_API_KEY (and optionally LLM_BASE_URL)
 pnpm dev
 ```
 
-- 前端：http://localhost:5173
-- 后端：http://localhost:8787
+- Frontend: http://localhost:5173
+- Backend: http://localhost:8787
 
-## 2. 请求结构（前端 -> 后端）
+## Request Format (Frontend → Backend)
 
 ```json
 {
-  "messages": [{"role":"user","content":"你好"}],
+  "messages": [{ "role": "user", "content": "Hello" }],
   "model": "auto",
   "mode": "stream",
   "session_id": "s_demo_001",
@@ -33,51 +32,68 @@ pnpm dev
 }
 ```
 
-## 3. 核心链路
+## Core Flow
 
-1. 前端提交 `/chat`（non-stream）或 `/chat/stream`（stream）
-2. 后端执行 mock 鉴权（user/余额）
-3. 合并 system prompt + messages + tools + sampling
-4. router 选择具体模型
-5. 调 provider
-   - non-stream: 一次拿完整结果
-   - stream: 逐块拿 `delta.content`
-6. 回包
-   - non-stream: JSON
-   - stream: SSE（`event + data`）
-7. 日志记录 latency / tokens / trace_id / error
+1. Frontend sends `POST /chat` (non-stream) or `POST /chat/stream` (stream)
+2. Backend runs auth guard (user validation + balance check)
+3. Merges system prompt + user messages + tool definitions + sampling params
+4. Router selects the target model
+5. Calls provider
+   - Non-stream: returns full completion as JSON
+   - Stream: yields `delta.content` chunks via SSE
+6. Response
+   - Non-stream: JSON body
+   - Stream: SSE events (`event` + `data`)
+7. Logs: latency / tokens / trace_id / error
 
-## 4. SSE 事件格式
+## SSE Event Format
 
 ```txt
 event: message
-data: {"type":"delta","text":"你好"}
+data: {"type":"delta","text":"Hello"}
 
 event: done
 data: {"type":"done","usage":{"prompt_tokens":...}}
 ```
 
-## 5. 模型路由示例
+## Model Router
 
 `server/src/core/router.ts`
 
-- 用户显式指定模型且不为 auto -> 直通
-- 需要工具（文本中命中 time/时间）-> tool 模型
-- 上下文字符量大 -> long-context 模型
-- 否则 -> cheap 模型
+- User explicitly specifies a model (not `auto`) → pass through
+- Tool call needed (text matches `time` / `时间`) → tool-capable model
+- Large context (> 12k chars) → long-context model
+- Default → cheap model
 
-## 6. mock 鉴权示例
+## Mock Auth
 
 `server/src/mock/db.ts`
 
-- `u_001` 默认可用
-- `u_003` inactive / 余额不足场景可测试错误分支
+- `u_001` — active, pro plan (default test user)
+- `u_003` — inactive, zero balance (for testing error branches)
 
-## 7. 关键文件
+## Key Files
 
-- server/src/routes/chat.ts：非流式
-- server/src/routes/chat-stream.ts：流式（SSE）
-- server/src/core/provider.ts：provider 调用
-- web/src/api.ts：前端请求 + SSE 解析
-- web/src/App.tsx：UI + 增量渲染
+| File | Description |
+|------|-------------|
+| `server/src/routes/chat.ts` | Non-stream chat endpoint |
+| `server/src/routes/chat-stream.ts` | Stream chat endpoint (SSE) |
+| `server/src/core/provider.ts` | LLM provider calls |
+| `server/src/core/router.ts` | Model selection logic |
+| `server/src/core/auth.ts` | Auth guard middleware |
+| `server/src/core/sse.ts` | SSE helpers |
+| `server/src/core/logger.ts` | Structured request logging |
+| `web/src/api.ts` | Frontend API + SSE parser |
+| `web/src/App.tsx` | Chat UI + incremental rendering |
 
+## Roadmap
+
+See [Issues](https://github.com/zjy4fun/llm-chat/issues) for the full development plan, organized in three phases:
+
+- **Phase 1** — Core completion (persistence, tool calling, context management)
+- **Phase 2** — Production infrastructure (auth, rate limiting, multi-provider, observability)
+- **Phase 3** — Differentiation (model comparison, export, RAG)
+
+## License
+
+MIT

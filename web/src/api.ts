@@ -1,6 +1,6 @@
 import type { ChatMessage, ChatRequest } from './types';
 
-const BASE_URL = 'http://localhost:8787';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787';
 
 export async function sendNonStream(payload: ChatRequest): Promise<{ text: string; raw: any }> {
   const res = await fetch(`${BASE_URL}/chat`, {

@@ -5,3 +5,6 @@ web/dist
 *.tsbuildinfo
 .env
 server/.env
+.idea
+.codex
+.claude

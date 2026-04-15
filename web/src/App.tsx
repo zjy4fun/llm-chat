@@ -184,9 +184,10 @@ export default function App() {
       return;
     }
 
+    const conversationChanged = didConversationChange(cached, response.conversation, response.items);
     upsertConversation(response.conversation);
 
-    if (didConversationChange(cached, response.conversation, response.items)) {
+    if (conversationChanged) {
       await syncCachedConversation(response.conversation, response.items);
     }
 
@@ -194,7 +195,7 @@ export default function App() {
       return;
     }
 
-    if (!cached || didConversationChange(cached, response.conversation, response.items)) {
+    if (!cached || conversationChanged) {
       setMessages(response.items);
     }
   };
@@ -372,8 +373,8 @@ export default function App() {
   };
 
   return (
-    <main className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen max-w-7xl flex-col">
+    <main className="h-screen overflow-hidden bg-background text-foreground">
+      <div className="mx-auto flex h-screen max-w-7xl flex-col overflow-hidden">
         <header className="border-b border-border px-4 py-4">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
@@ -455,7 +456,7 @@ export default function App() {
             onSelectConversation={(conversation) => void handleSelectConversation(conversation)}
           />
 
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
             <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
               {currentConversation ? currentConversation.title : 'Select a conversation or start a new one.'}
             </div>
@@ -486,7 +487,7 @@ export default function App() {
               </div>
             </ScrollArea>
 
-            <div className="border-t border-border px-4 py-4">
+            <div className="shrink-0 border-t border-border px-4 py-4">
               <div className="mx-auto w-full max-w-4xl">
                 <ChatInput
                   disabled={!canSend}

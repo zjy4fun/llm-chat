@@ -146,6 +146,22 @@ describe('App conversation workspace', () => {
     apiMocks.deleteConversation.mockResolvedValue(undefined);
   });
 
+  it('keeps the conversation workspace constrained to the viewport so the message list can scroll without pushing the composer off-screen', async () => {
+    render(<App />);
+
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    const main = screen.getByRole('main');
+    expect(main.className).toContain('h-screen');
+    expect(main.className).toContain('overflow-hidden');
+
+    const shell = main.firstElementChild as HTMLElement | null;
+    expect(shell?.className).toContain('overflow-hidden');
+
+    const composer = screen.getByPlaceholderText('Type your prompt...').closest('div[class*="border-t"]') as HTMLElement | null;
+    expect(composer?.className).toContain('shrink-0');
+  });
+
   it('keeps controls on a single page, filters conversations by title and cached content, shows cached content immediately, then revalidates in background', async () => {
     const user = userEvent.setup();
 

@@ -8,12 +8,14 @@ import {
   getConversationMessageCount,
   type DB
 } from '../core/db.js';
-import { chooseModel } from '../core/router.js';
-import { buildMessages, TOOL_DEFINITIONS } from '../core/prompt.js';
-import { chatNonStream, toProviderMessages, type ProviderParams } from '../core/provider.js';
-import type { ProviderCompletion } from '../types/provider.js';
 import { logChat } from '../core/logger.js';
+import { buildMessages } from '../core/prompt.js';
+import { chatNonStream, toProviderMessages, type ProviderParams } from '../core/provider.js';
+import { runNonStreamToolLoop, shouldUseTools } from '../core/tool-loop.js';
+import { chooseModel } from '../core/router.js';
 import { consumeBalance } from '../mock/db.js';
+import type { ChatMessage } from '../types/chat.js';
+import type { ProviderCompletion } from '../types/provider.js';
 
 const chatSchema = z.object({
   messages: z.array(
@@ -49,24 +51,36 @@ export function createChatRouter({
       const input = chatSchema.parse(req.body);
       authGuard(input.user_id);
 
-      const needTools = input.messages.some((m) => /time|时间/i.test(m.content));
+      const needTools = shouldUseTools(input.messages);
       const selectedModel = chooseModel({
         requestedModel: input.model,
         messages: input.messages,
         needTools
       });
 
-      const mergedMessages = buildMessages(input.messages);
-      const completion = await provider.chatNonStream({
-        model: selectedModel,
-        messages: toProviderMessages(mergedMessages),
-        tools: needTools ? TOOL_DEFINITIONS : undefined,
-        temperature: input.temperature,
-        max_tokens: input.max_tokens
-      });
+      const mergedMessages = buildMessages(input.messages as ChatMessage[]);
+      const result = needTools
+        ? await runNonStreamToolLoop(provider, {
+            model: selectedModel,
+            messages: mergedMessages,
+            temperature: input.temperature,
+            max_tokens: input.max_tokens
+          })
+        : await (async () => {
+            const completion = await provider.chatNonStream({
+              model: selectedModel,
+              messages: toProviderMessages(mergedMessages),
+              temperature: input.temperature,
+              max_tokens: input.max_tokens
+            });
 
-      const usage = completion.usage;
-      const text = completion.choices[0]?.message?.content ?? '';
+            return {
+              text: completion.choices[0]?.message?.content ?? '',
+              usage: completion.usage ?? {},
+              toolMessages: []
+            };
+          })();
+
       const latencyMs = Date.now() - begin;
       const conversationId = input.conversation_id ?? input.session_id;
       const firstUserMessage = input.messages.find((message) => message.role === 'user')?.content;
@@ -91,8 +105,8 @@ export function createChatRouter({
         })),
         {
           role: 'assistant' as const,
-          content: text,
-          tokenCount: usage?.completion_tokens ?? usage?.total_tokens ?? null
+          content: result.text,
+          tokenCount: result.usage?.completion_tokens ?? result.usage?.total_tokens ?? null
         }
       ]);
 
@@ -105,9 +119,9 @@ export function createChatRouter({
         model: selectedModel,
         mode: 'non-stream',
         latencyMs,
-        promptTokens: usage?.prompt_tokens ?? undefined,
-        completionTokens: usage?.completion_tokens ?? undefined,
-        totalTokens: usage?.total_tokens ?? undefined
+        promptTokens: result.usage?.prompt_tokens ?? undefined,
+        completionTokens: result.usage?.completion_tokens ?? undefined,
+        totalTokens: result.usage?.total_tokens ?? undefined
       });
 
       res.json({
@@ -115,11 +129,12 @@ export function createChatRouter({
         session_id: input.session_id,
         conversation_id: conversationId,
         model: selectedModel,
-        message: { role: 'assistant', content: text },
+        tool_messages: result.toolMessages,
+        message: { role: 'assistant', content: result.text },
         usage: {
-          prompt_tokens: usage?.prompt_tokens ?? null,
-          completion_tokens: usage?.completion_tokens ?? null,
-          total_tokens: usage?.total_tokens ?? null
+          prompt_tokens: result.usage?.prompt_tokens ?? null,
+          completion_tokens: result.usage?.completion_tokens ?? null,
+          total_tokens: result.usage?.total_tokens ?? null
         },
         latency_ms: latencyMs
       });

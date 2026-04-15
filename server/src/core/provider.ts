@@ -54,6 +54,20 @@ export function toProviderMessages(messages: ChatMessage[]): OpenAI.Chat.Complet
       };
     }
     if (m.role === 'assistant') {
+      if (m.tool_calls?.length) {
+        return {
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.tool_calls.map((toolCall) => ({
+            id: toolCall.id,
+            type: 'function',
+            function: {
+              name: toolCall.function.name,
+              arguments: toolCall.function.arguments
+            }
+          }))
+        };
+      }
       return { role: 'assistant', content: m.content };
     }
     if (m.role === 'system') {

@@ -56,11 +56,15 @@ export default function App() {
       if (mode === 'non-stream') {
         const payload = makePayload({ history, prompt, mode, model, userId, sessionId });
         const result = await sendNonStream(payload);
-        setMessages((prev) => [...prev, { role: 'assistant', content: result.text }]);
+        setMessages((prev) => [
+          ...prev,
+          ...(result.raw.tool_messages ?? []).map((message) => ({ ...message, displayOnly: true })),
+          { role: 'assistant', content: result.text }
+        ]);
       } else {
         const payload = makePayload({ history, prompt, mode, model, userId, sessionId });
         let aiText = '';
-        setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+        let assistantIndex = -1;
 
         await sendStream(
           payload,
@@ -68,12 +72,20 @@ export default function App() {
             aiText += delta;
             setMessages((prev) => {
               const copy = [...prev];
-              copy[copy.length - 1] = { role: 'assistant', content: aiText };
+              if (assistantIndex === -1) {
+                copy.push({ role: 'assistant', content: aiText });
+                assistantIndex = copy.length - 1;
+                return copy;
+              }
+              copy[assistantIndex] = { role: 'assistant', content: aiText };
               return copy;
             });
           },
           () => {
             // done event hook
+          },
+          (toolEvent) => {
+            setMessages((prev) => [...prev, { ...toolEvent.message, displayOnly: true }]);
           }
         );
       }

@@ -8,13 +8,15 @@ import {
   getConversationMessageCount,
   type DB
 } from '../core/db.js';
-import { chooseModel } from '../core/router.js';
-import { buildMessages, TOOL_DEFINITIONS } from '../core/prompt.js';
-import { chatStream, toProviderMessages, type ProviderParams } from '../core/provider.js';
-import type { ProviderStreamResult } from '../types/provider.js';
-import { initSSE, sendSSE } from '../core/sse.js';
 import { logChat } from '../core/logger.js';
+import { buildMessages } from '../core/prompt.js';
+import { chatStream, type ProviderParams } from '../core/provider.js';
+import { initSSE, sendSSE } from '../core/sse.js';
+import { runStreamToolLoop, shouldUseTools } from '../core/tool-loop.js';
+import { chooseModel } from '../core/router.js';
 import { consumeBalance } from '../mock/db.js';
+import type { ChatMessage } from '../types/chat.js';
+import type { ProviderStreamResult } from '../types/provider.js';
 
 const chatStreamSchema = z.object({
   messages: z.array(
@@ -47,11 +49,13 @@ export function createChatStreamRouter({
   chatStreamRouter.post('/', async (req, res) => {
     const begin = Date.now();
     let input: z.infer<typeof chatStreamSchema> | null = null;
+    let activeController: ProviderStreamResult['controller'] | null = null;
+
     try {
       input = chatStreamSchema.parse(req.body);
       authGuard(input.user_id);
 
-      const needTools = input.messages.some((m) => /time|时间/i.test(m.content));
+      const needTools = shouldUseTools(input.messages);
       const selectedModel = chooseModel({
         requestedModel: input.model,
         messages: input.messages,
@@ -67,44 +71,37 @@ export function createChatStreamRouter({
         model: selectedModel
       });
 
-      const stream = await provider.chatStream({
-        model: selectedModel,
-        messages: toProviderMessages(buildMessages(input.messages)),
-        tools: needTools ? TOOL_DEFINITIONS : undefined,
-        temperature: input.temperature,
-        max_tokens: input.max_tokens
-      });
-
-      let fullText = '';
-      let usage: { prompt_tokens?: number | null; completion_tokens?: number | null; total_tokens?: number | null } = {};
-
       req.on('close', () => {
         try {
-          stream.controller.abort();
+          activeController?.abort();
         } catch {
           // noop
         }
       });
 
-      for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta?.content ?? '';
-        if (delta) {
-          fullText += delta;
+      const mergedMessages = buildMessages(input.messages as ChatMessage[]);
+      const result = await runStreamToolLoop(provider, {
+        model: selectedModel,
+        messages: mergedMessages,
+        temperature: input.temperature,
+        max_tokens: input.max_tokens,
+        onController: (controller) => {
+          activeController = controller;
+        },
+        onTextDelta: (delta) => {
           sendSSE(res, 'message', {
             type: 'delta',
             text: delta,
-            trace_id: input.trace_id
+            trace_id: input?.trace_id
+          });
+        },
+        onToolMessage: (message) => {
+          sendSSE(res, 'tool', {
+            type: 'tool',
+            message
           });
         }
-
-        if (chunk.usage) {
-          usage = {
-            prompt_tokens: chunk.usage.prompt_tokens,
-            completion_tokens: chunk.usage.completion_tokens,
-            total_tokens: chunk.usage.total_tokens
-          };
-        }
-      }
+      });
 
       const latencyMs = Date.now() - begin;
       const conversationId = input.conversation_id ?? input.session_id;
@@ -130,8 +127,8 @@ export function createChatStreamRouter({
         })),
         {
           role: 'assistant' as const,
-          content: fullText,
-          tokenCount: usage.completion_tokens ?? usage.total_tokens ?? null
+          content: result.text,
+          tokenCount: result.usage.completion_tokens ?? result.usage.total_tokens ?? null
         }
       ]);
 
@@ -139,8 +136,9 @@ export function createChatStreamRouter({
 
       sendSSE(res, 'done', {
         type: 'done',
-        text: fullText,
-        usage,
+        text: result.text,
+        usage: result.usage,
+        tool_messages: result.toolMessages,
         latency_ms: latencyMs,
         trace_id: input.trace_id,
         conversation_id: conversationId
@@ -153,9 +151,9 @@ export function createChatStreamRouter({
         model: selectedModel,
         mode: 'stream',
         latencyMs,
-        promptTokens: usage.prompt_tokens ?? undefined,
-        completionTokens: usage.completion_tokens ?? undefined,
-        totalTokens: usage.total_tokens ?? undefined
+        promptTokens: result.usage.prompt_tokens ?? undefined,
+        completionTokens: result.usage.completion_tokens ?? undefined,
+        totalTokens: result.usage.total_tokens ?? undefined
       });
 
       res.end();

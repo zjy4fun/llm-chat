@@ -198,4 +198,80 @@ describe('App conversation workspace', () => {
     });
     expect(screen.queryByText('Daily Notes')).not.toBeInTheDocument();
   });
+
+  it('revalidates with the server when cached conversation metadata is older than the sidebar conversation', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.listConversations.mockResolvedValue({
+      items: [
+        {
+          id: 'c-1',
+          user_id: 'u_001',
+          title: 'Project Alpha',
+          created_at: '2026-04-15T00:00:00.000Z',
+          updated_at: '2026-04-15T12:00:00.000Z',
+          message_count: 2
+        },
+        {
+          id: 'c-2',
+          user_id: 'u_001',
+          title: 'Daily Notes',
+          created_at: '2026-04-15T00:00:00.000Z',
+          updated_at: '2026-04-15T00:00:00.000Z',
+          message_count: 1
+        }
+      ],
+      total: 2,
+      page: 1,
+      page_size: 20
+    });
+
+    cacheMocks.get.mockImplementation(async (id: string) => {
+      if (id === 'c-1') {
+        return {
+          conversation: {
+            id: 'c-1',
+            user_id: 'u_001',
+            title: 'Project Alpha',
+            created_at: '2026-04-15T00:00:00.000Z',
+            updated_at: '2026-04-15T00:00:00.000Z',
+            message_count: 2
+          },
+          messages: [
+            { role: 'user', content: 'stale cached question' },
+            { role: 'assistant', content: 'stale cached answer' }
+          ],
+          contentText: 'stale cached question stale cached answer',
+          lastViewedAt: 10
+        };
+      }
+      return null;
+    });
+
+    apiMocks.getConversationMessages.mockImplementation(async (id: string) => ({
+      conversation: {
+        id,
+        user_id: 'u_001',
+        title: 'Project Alpha',
+        created_at: '2026-04-15T00:00:00.000Z',
+        updated_at: '2026-04-15T12:00:00.000Z',
+        message_count: 2
+      },
+      items: [
+        { role: 'user', content: 'fresh server question' },
+        { role: 'assistant', content: 'fresh server answer' }
+      ]
+    }));
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Open Project Alpha$/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001');
+    });
+    expect(await screen.findByText('fresh server answer')).toBeInTheDocument();
+    expect(screen.queryByText('stale cached answer')).not.toBeInTheDocument();
+  });
 });

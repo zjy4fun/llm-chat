@@ -128,12 +128,16 @@ export default function App() {
     });
   };
 
+  const isCachedConversationFresh = (cached: CachedConversationRecord, conversation: ConversationSummary) => {
+    return new Date(cached.conversation.updated_at).getTime() >= new Date(conversation.updated_at).getTime();
+  };
+
   const handleSelectConversation = async (conversation: ConversationSummary) => {
     setCurrentConversationId(conversation.id);
     setSessionId(conversation.id);
 
     const cached = await cache.get(conversation.id);
-    if (cached) {
+    if (cached && isCachedConversationFresh(cached, conversation)) {
       setMessages(cached.messages);
       setCachedConversations((prev) => {
         const rest = prev.filter((entry) => entry.conversation.id !== conversation.id);

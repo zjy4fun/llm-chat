@@ -9,13 +9,20 @@ export interface ProviderParams {
   max_tokens?: number;
 }
 
-const client = new OpenAI({
-  apiKey: process.env.LLM_API_KEY,
-  baseURL: process.env.LLM_BASE_URL || 'https://api.openai.com/v1'
-});
+let client: OpenAI | null = null;
+
+function getClient() {
+  if (!client) {
+    client = new OpenAI({
+      apiKey: process.env.LLM_API_KEY,
+      baseURL: process.env.LLM_BASE_URL || 'https://api.openai.com/v1'
+    });
+  }
+  return client;
+}
 
 export async function chatNonStream(params: ProviderParams) {
-  return client.chat.completions.create({
+  return getClient().chat.completions.create({
     model: params.model,
     messages: params.messages,
     tools: params.tools,
@@ -26,7 +33,7 @@ export async function chatNonStream(params: ProviderParams) {
 }
 
 export async function chatStream(params: ProviderParams) {
-  return client.chat.completions.create({
+  return getClient().chat.completions.create({
     model: params.model,
     messages: params.messages,
     tools: params.tools,

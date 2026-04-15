@@ -51,6 +51,7 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [cachedConversations, setCachedConversations] = useState<CachedConversationRecord[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const activeConversationIdRef = useRef<string | null>(null);
   const cache = useMemo(() => createConversationCache(), []);
 
   const currentConversation = useMemo(
@@ -84,6 +85,10 @@ export default function App() {
       return titleMatch || contentMatch;
     });
   }, [cachedSearchIndex, conversations, searchQuery]);
+
+  useEffect(() => {
+    activeConversationIdRef.current = currentConversationId;
+  }, [currentConversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'auto' : 'smooth', block: 'end' });
@@ -135,21 +140,43 @@ export default function App() {
   const handleSelectConversation = async (conversation: ConversationSummary) => {
     setCurrentConversationId(conversation.id);
     setSessionId(conversation.id);
+    activeConversationIdRef.current = conversation.id;
 
     const cached = await cache.get(conversation.id);
-    if (cached && isCachedConversationFresh(cached, conversation)) {
+    if (cached) {
       setMessages(cached.messages);
       setCachedConversations((prev) => {
         const rest = prev.filter((entry) => entry.conversation.id !== conversation.id);
         return [cached, ...rest].sort((a, b) => b.lastViewedAt - a.lastViewedAt).slice(0, 50);
       });
+    }
+
+    const shouldRevalidate = !cached || !isCachedConversationFresh(cached, conversation);
+    if (!shouldRevalidate) {
+      void (async () => {
+        const response = await getConversationMessages(conversation.id, userId);
+        upsertConversation(response.conversation);
+        await syncCachedConversation(response.conversation, response.items);
+        if (activeConversationIdRef.current === conversation.id) {
+          const cachedText = cached?.messages.map((message) => `${message.role}:${message.content}`).join('\n') ?? '';
+          const responseText = response.items.map((message) => `${message.role}:${message.content}`).join('\n');
+          const responseIsNewer = new Date(response.conversation.updated_at).getTime() > new Date(cached?.conversation.updated_at ?? 0).getTime();
+          if (responseIsNewer || responseText !== cachedText) {
+            setMessages(response.items);
+          }
+        }
+      })().catch((error) => {
+        console.error('Failed to revalidate conversation', error);
+      });
       return;
     }
 
     const response = await getConversationMessages(conversation.id, userId);
-    setMessages(response.items);
     upsertConversation(response.conversation);
     await syncCachedConversation(response.conversation, response.items);
+    if (activeConversationIdRef.current === conversation.id) {
+      setMessages(response.items);
+    }
   };
 
   const handleCreateConversation = async () => {

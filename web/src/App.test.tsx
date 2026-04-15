@@ -146,8 +146,17 @@ describe('App conversation workspace', () => {
     apiMocks.deleteConversation.mockResolvedValue(undefined);
   });
 
-  it('keeps controls on a single page, filters conversations by title and cached content, and loads a cache hit without re-fetching', async () => {
+  it('keeps controls on a single page, filters conversations by title and cached content, shows cached content immediately, then revalidates in background', async () => {
     const user = userEvent.setup();
+
+    let resolveMessages!: (value: any) => void;
+    apiMocks.getConversationMessages.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveMessages = resolve;
+        }) as Promise<any>
+    );
+
     render(<App />);
 
     expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
@@ -164,10 +173,29 @@ describe('App conversation workspace', () => {
 
     await user.click(screen.getByRole('button', { name: /^Open Project Alpha$/i }));
 
+    expect(await screen.findByText('cached assistant reply')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('cached assistant reply')).toBeInTheDocument();
+      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001');
     });
-    expect(apiMocks.getConversationMessages).not.toHaveBeenCalledWith('c-1', 'u_001');
+
+    resolveMessages({
+      conversation: {
+        id: 'c-1',
+        user_id: 'u_001',
+        title: 'Project Alpha',
+        created_at: '2026-04-15T00:00:00.000Z',
+        updated_at: '2026-04-15T00:00:00.000Z',
+        message_count: 2
+      },
+      items: [
+        { role: 'user', content: 'cached keyword from alpha' },
+        { role: 'assistant', content: 'cached assistant reply' }
+      ]
+    });
+
+    await waitFor(() => {
+      expect(cacheMocks.put).toHaveBeenCalled();
+    });
   });
 
   it('creates, renames, selects, and deletes conversations from the sidebar', async () => {

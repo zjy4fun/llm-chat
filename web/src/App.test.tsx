@@ -146,12 +146,15 @@ describe('App conversation workspace', () => {
     apiMocks.deleteConversation.mockResolvedValue(undefined);
   });
 
-  it('filters conversations by title and cached content, and loads a cache hit without re-fetching', async () => {
+  it('keeps controls on a single page, filters conversations by title and cached content, and loads a cache hit without re-fetching', async () => {
     const user = userEvent.setup();
     render(<App />);
 
     expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
     expect(screen.getByText('Daily Notes')).toBeInTheDocument();
+    expect(screen.getByLabelText('User ID')).toBeInTheDocument();
+    expect(screen.getByLabelText('Session ID')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show settings/i })).not.toBeInTheDocument();
 
     const search = screen.getByPlaceholderText('Search conversations');
     await user.type(search, 'cached keyword');
@@ -181,7 +184,7 @@ describe('App conversation workspace', () => {
 
     await user.click(screen.getByRole('button', { name: /rename New conversation/i }));
     expect(apiMocks.renameConversation).toHaveBeenCalledWith('c-3', 'u_001', 'Renamed conversation');
-    expect(await screen.findByText('Renamed conversation')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Open Renamed conversation$/i })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: /^Open Daily Notes$/i }));
     await waitFor(() => {

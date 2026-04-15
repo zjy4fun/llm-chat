@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BotMessageSquare, Sparkles } from 'lucide-react';
+import { MessageSquarePlus, Search } from 'lucide-react';
 import {
   createConversation,
   deleteConversation,
@@ -11,12 +11,19 @@ import {
   sendStream,
   toCachedConversation
 } from './api';
-import { ChatHeader } from './components/ChatHeader';
 import { ChatInput } from './components/ChatInput';
 import { ChatMessage } from './components/ChatMessage';
 import { ConversationSidebar } from './components/ConversationSidebar';
-import { SettingsPanel } from './components/SettingsPanel';
-import { Card } from './components/ui/card';
+import { Button } from './components/ui/button';
+import { Input } from './components/ui/input';
+import { Label } from './components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from './components/ui/select';
 import { ScrollArea } from './components/ui/scroll-area';
 import { createConversationCache } from './lib/conversation-cache';
 import type { CachedConversationRecord, ChatMessage as ChatMessageData, ConversationSummary, Mode } from './types';
@@ -39,7 +46,6 @@ export default function App() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [loading, setLoading] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
@@ -276,104 +282,102 @@ export default function App() {
   };
 
   return (
-    <main className="relative min-h-screen overflow-hidden px-3 py-3 sm:px-6 sm:py-6">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="ambient-orb absolute left-[6%] top-12 size-36 rounded-full bg-primary/12 blur-3xl" />
-        <div
-          className="ambient-orb absolute right-[8%] top-[28%] size-44 rounded-full bg-accent/15 blur-3xl"
-          style={{ animationDelay: '-6s' }}
-        />
-        <div
-          className="ambient-orb absolute bottom-[8%] left-[18%] size-52 rounded-full bg-secondary/20 blur-3xl"
-          style={{ animationDelay: '-2s' }}
-        />
-      </div>
+    <main className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen max-w-7xl flex-col">
+        <header className="border-b border-border px-4 py-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+              <div>
+                <h1 className="text-2xl font-semibold">LLM Chat</h1>
+                <p className="text-sm text-muted-foreground">Conversations, controls, history, and composer all stay on one page.</p>
+              </div>
 
-      <Card className="relative mx-auto flex min-h-[calc(100vh-1.5rem)] max-w-7xl flex-col overflow-hidden border-border/60 bg-card/82">
-        <ChatHeader
-          messageCount={messages.length}
-          mode={mode}
-          model={model}
-          modelOptions={modelOptions}
-          onModeChange={setMode}
-          onModelChange={setModel}
-          onToggleSettings={() => setSettingsOpen((prev) => !prev)}
-          sessionId={currentConversationId ?? sessionId}
-          settingsOpen={settingsOpen}
-        />
+              <Button onClick={() => void handleCreateConversation()} size="sm" variant="secondary">
+                <MessageSquarePlus className="size-4" />
+                New conversation
+              </Button>
+            </div>
 
-        <SettingsPanel
-          mode={mode}
-          model={model}
-          onModeChange={setMode}
-          onModelChange={setModel}
-          onSessionIdChange={setSessionId}
-          onUserIdChange={setUserId}
-          open={settingsOpen}
-          sessionId={currentConversationId ?? sessionId}
-          userId={userId}
-        />
+            <div className="grid gap-3 md:grid-cols-[minmax(0,1.2fr)_repeat(4,minmax(0,0.7fr))]">
+              <div className="space-y-2">
+                <Label htmlFor="conversation-search">Search conversations</Label>
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="conversation-search"
+                    className="pl-9"
+                    onChange={(event) => setSearchQuery(event.target.value)}
+                    placeholder="Search conversations"
+                    value={searchQuery}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="mode-select">Mode</Label>
+                <Select value={mode} onValueChange={(value) => setMode(value as Mode)}>
+                  <SelectTrigger id="mode-select">
+                    <SelectValue placeholder="Select mode" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="stream">Stream</SelectItem>
+                    <SelectItem value="non-stream">Non-stream</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="model-select">Model</Label>
+                <Select value={model} onValueChange={setModel}>
+                  <SelectTrigger id="model-select">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {modelOptions.map((option) => (
+                      <SelectItem key={option.value} value={option.value}>
+                        {option.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="user-id">User ID</Label>
+                <Input id="user-id" onChange={(event) => setUserId(event.target.value)} value={userId} />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="session-id">Session ID</Label>
+                <Input id="session-id" onChange={(event) => setSessionId(event.target.value)} value={currentConversationId ?? sessionId} />
+              </div>
+            </div>
+          </div>
+        </header>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
           <ConversationSidebar
             conversations={filteredConversations}
             currentConversationId={currentConversationId}
             loading={loading && conversations.length === 0}
-            onCreateConversation={() => void handleCreateConversation()}
             onDeleteConversation={(conversation) => void handleDeleteConversation(conversation)}
             onRenameConversation={(conversation) => void handleRenameConversation(conversation)}
-            onSearchQueryChange={setSearchQuery}
             onSelectConversation={(conversation) => void handleSelectConversation(conversation)}
-            searchQuery={searchQuery}
           />
 
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-            <ScrollArea className="min-h-0 flex-1">
-              <div className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-5 sm:px-6 sm:py-6">
-                {messages.length === 0 ? (
-                  <div className="flex min-h-[52vh] items-center justify-center py-8">
-                    <div className="relative max-w-2xl overflow-hidden rounded-[2rem] border border-border/70 bg-background/55 p-8 shadow-[0_24px_70px_-42px_rgba(0,0,0,0.95)]">
-                      <div
-                        aria-hidden="true"
-                        className="absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-primary/45 to-transparent"
-                      />
-                      <div className="relative space-y-6">
-                        <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
-                          <div className="flex size-14 items-center justify-center rounded-full bg-primary/14 text-primary ring-1 ring-inset ring-primary/20">
-                            <BotMessageSquare className="size-6" />
-                          </div>
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.32em] text-muted-foreground">
-                              <Sparkles className="size-3.5" />
-                              Conversation Workspace
-                            </div>
-                            <h2 className="font-display text-3xl leading-none sm:text-4xl">Pick a thread or start a new one.</h2>
-                            <p className="max-w-xl text-sm leading-7 text-muted-foreground sm:text-[15px]">
-                              Use the sidebar to browse previous chats, search cached content, and keep recently viewed
-                              conversations available locally without another network round trip.
-                            </p>
-                          </div>
-                        </div>
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+            <div className="border-b border-border px-4 py-3 text-sm text-muted-foreground">
+              {currentConversation ? currentConversation.title : 'Select a conversation or start a new one.'}
+            </div>
 
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="rounded-[1.4rem] border border-border/70 bg-secondary/55 p-4">
-                            <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">History</p>
-                            <p className="mt-2 text-sm leading-6 text-foreground">Load recent conversations from the sidebar and resume them instantly.</p>
-                          </div>
-                          <div className="rounded-[1.4rem] border border-border/70 bg-secondary/45 p-4">
-                            <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Search</p>
-                            <p className="mt-2 text-sm leading-6 text-foreground">Filter by conversation title or locally cached message content.</p>
-                          </div>
-                          <div className="rounded-[1.4rem] border border-border/70 bg-secondary/40 p-4">
-                            <p className="text-[11px] uppercase tracking-[0.28em] text-muted-foreground">Cache</p>
-                            <p className="mt-2 text-sm leading-6 text-foreground">Recently viewed threads stay in IndexedDB with LRU eviction after roughly 50 entries.</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-4">
+                {messages.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
+                    Select a conversation from the left, or create a new one and start typing below.
                   </div>
                 ) : (
-                  <div aria-live="polite" className="flex flex-col gap-5">
+                  <div aria-live="polite" className="flex flex-col gap-4">
                     {messages.map((message, index) => (
                       <ChatMessage
                         key={`${message.role}-${index}`}
@@ -392,7 +396,7 @@ export default function App() {
               </div>
             </ScrollArea>
 
-            <div className="border-t border-border/60 bg-background/18 px-4 py-4 sm:px-6">
+            <div className="border-t border-border px-4 py-4">
               <div className="mx-auto w-full max-w-4xl">
                 <ChatInput
                   disabled={!canSend}
@@ -416,9 +420,9 @@ export default function App() {
                 />
               </div>
             </div>
-          </div>
+          </section>
         </div>
-      </Card>
+      </div>
     </main>
   );
 }

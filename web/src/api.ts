@@ -98,10 +98,11 @@ export async function listConversations(userId: string, page = 1, pageSize = 20)
 
 export async function getConversationMessages(
   conversationId: string,
-  userId: string
+  userId: string,
+  signal?: AbortSignal
 ): Promise<ConversationMessagesResponse> {
   const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BASE_URL}/conversations/${conversationId}/messages?${params.toString()}`);
+  const res = await fetch(`${BASE_URL}/conversations/${conversationId}/messages?${params.toString()}`, { signal });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

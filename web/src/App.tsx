@@ -52,6 +52,7 @@ export default function App() {
   const [cachedConversations, setCachedConversations] = useState<CachedConversationRecord[]>([]);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
+  const revalidationControllerRef = useRef<AbortController | null>(null);
   const cache = useMemo(() => createConversationCache(), []);
 
   const currentConversation = useMemo(
@@ -91,6 +92,12 @@ export default function App() {
   }, [currentConversationId]);
 
   useEffect(() => {
+    return () => {
+      revalidationControllerRef.current?.abort();
+    };
+  }, []);
+
+  useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'auto' : 'smooth', block: 'end' });
   }, [messages, loading]);
 
@@ -126,6 +133,16 @@ export default function App() {
     });
   };
 
+  const touchCachedConversation = async (entry: CachedConversationRecord) => {
+    const touchedEntry = { ...entry, lastViewedAt: Date.now() };
+    await cache.put(touchedEntry);
+    setCachedConversations((prev) => {
+      const rest = prev.filter((item) => item.conversation.id !== touchedEntry.conversation.id);
+      return [touchedEntry, ...rest].sort((a, b) => b.lastViewedAt - a.lastViewedAt).slice(0, 50);
+    });
+    return touchedEntry;
+  };
+
   const upsertConversation = (conversation: ConversationSummary) => {
     setConversations((prev) => {
       const next = [conversation, ...prev.filter((item) => item.id !== conversation.id)];
@@ -133,8 +150,53 @@ export default function App() {
     });
   };
 
-  const isCachedConversationFresh = (cached: CachedConversationRecord, conversation: ConversationSummary) => {
-    return new Date(cached.conversation.updated_at).getTime() >= new Date(conversation.updated_at).getTime();
+  const haveMessagesChanged = (left: ChatMessageData[], right: ChatMessageData[]) => {
+    if (left.length !== right.length) {
+      return true;
+    }
+
+    return left.some((message, index) => {
+      const other = right[index];
+      return message.role !== other?.role || message.content !== other?.content;
+    });
+  };
+
+  const didConversationChange = (cached: CachedConversationRecord | null, conversation: ConversationSummary, nextMessages: ChatMessageData[]) => {
+    if (!cached) {
+      return true;
+    }
+
+    return (
+      cached.conversation.updated_at !== conversation.updated_at ||
+      cached.conversation.title !== conversation.title ||
+      cached.conversation.message_count !== conversation.message_count ||
+      haveMessagesChanged(cached.messages, nextMessages)
+    );
+  };
+
+  const revalidateConversation = async (
+    conversation: ConversationSummary,
+    cached: CachedConversationRecord | null,
+    signal: AbortSignal
+  ) => {
+    const response = await getConversationMessages(conversation.id, userId, signal);
+    if (signal.aborted) {
+      return;
+    }
+
+    upsertConversation(response.conversation);
+
+    if (didConversationChange(cached, response.conversation, response.items)) {
+      await syncCachedConversation(response.conversation, response.items);
+    }
+
+    if (activeConversationIdRef.current !== conversation.id) {
+      return;
+    }
+
+    if (!cached || didConversationChange(cached, response.conversation, response.items)) {
+      setMessages(response.items);
+    }
   };
 
   const handleSelectConversation = async (conversation: ConversationSummary) => {
@@ -142,40 +204,37 @@ export default function App() {
     setSessionId(conversation.id);
     activeConversationIdRef.current = conversation.id;
 
+    revalidationControllerRef.current?.abort();
+    const controller = new AbortController();
+    revalidationControllerRef.current = controller;
+
     const cached = await cache.get(conversation.id);
-    if (cached) {
-      setMessages(cached.messages);
-      setCachedConversations((prev) => {
-        const rest = prev.filter((entry) => entry.conversation.id !== conversation.id);
-        return [cached, ...rest].sort((a, b) => b.lastViewedAt - a.lastViewedAt).slice(0, 50);
-      });
+    if (activeConversationIdRef.current !== conversation.id) {
+      controller.abort();
+      return;
     }
 
-    const shouldRevalidate = !cached || !isCachedConversationFresh(cached, conversation);
-    if (!shouldRevalidate) {
-      void (async () => {
-        const response = await getConversationMessages(conversation.id, userId);
-        upsertConversation(response.conversation);
-        await syncCachedConversation(response.conversation, response.items);
-        if (activeConversationIdRef.current === conversation.id) {
-          const cachedText = cached?.messages.map((message) => `${message.role}:${message.content}`).join('\n') ?? '';
-          const responseText = response.items.map((message) => `${message.role}:${message.content}`).join('\n');
-          const responseIsNewer = new Date(response.conversation.updated_at).getTime() > new Date(cached?.conversation.updated_at ?? 0).getTime();
-          if (responseIsNewer || responseText !== cachedText) {
-            setMessages(response.items);
-          }
+    if (cached) {
+      setMessages(cached.messages);
+      await touchCachedConversation(cached);
+      void revalidateConversation(conversation, cached, controller.signal).catch((error) => {
+        if (error instanceof DOMException && error.name === 'AbortError') {
+          return;
         }
-      })().catch((error) => {
         console.error('Failed to revalidate conversation', error);
       });
       return;
     }
 
-    const response = await getConversationMessages(conversation.id, userId);
-    upsertConversation(response.conversation);
-    await syncCachedConversation(response.conversation, response.items);
-    if (activeConversationIdRef.current === conversation.id) {
-      setMessages(response.items);
+    setMessages([]);
+
+    try {
+      await revalidateConversation(conversation, null, controller.signal);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return;
+      }
+      console.error('Failed to load conversation', error);
     }
   };
 

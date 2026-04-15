@@ -175,7 +175,7 @@ describe('App conversation workspace', () => {
 
     expect(await screen.findByText('cached assistant reply')).toBeInTheDocument();
     await waitFor(() => {
-      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001');
+      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001', expect.any(AbortSignal));
     });
 
     resolveMessages({
@@ -216,7 +216,7 @@ describe('App conversation workspace', () => {
 
     await user.click(screen.getByRole('button', { name: /^Open Daily Notes$/i }));
     await waitFor(() => {
-      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-2', 'u_001');
+      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-2', 'u_001', expect.any(AbortSignal));
     });
     expect(await screen.findByText('You shipped the sidebar.')).toBeInTheDocument();
 
@@ -297,9 +297,93 @@ describe('App conversation workspace', () => {
     await user.click(screen.getByRole('button', { name: /^Open Project Alpha$/i }));
 
     await waitFor(() => {
-      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001');
+      expect(apiMocks.getConversationMessages).toHaveBeenCalledWith('c-1', 'u_001', expect.any(AbortSignal));
     });
     expect(await screen.findByText('fresh server answer')).toBeInTheDocument();
     expect(screen.queryByText('stale cached answer')).not.toBeInTheDocument();
+  });
+
+  it('aborts an older conversation revalidation when the user switches to another conversation', async () => {
+    const user = userEvent.setup();
+    let alphaSignal: AbortSignal | undefined;
+
+    cacheMocks.get.mockImplementation(async (id: string) => {
+      if (id === 'c-1') {
+        return {
+          conversation: {
+            id: 'c-1',
+            user_id: 'u_001',
+            title: 'Project Alpha',
+            created_at: '2026-04-15T00:00:00.000Z',
+            updated_at: '2026-04-15T00:00:00.000Z',
+            message_count: 2
+          },
+          messages: [
+            { role: 'user', content: 'alpha cached question' },
+            { role: 'assistant', content: 'alpha cached answer' }
+          ],
+          contentText: 'alpha cached question alpha cached answer',
+          lastViewedAt: 10
+        };
+      }
+
+      if (id === 'c-2') {
+        return {
+          conversation: {
+            id: 'c-2',
+            user_id: 'u_001',
+            title: 'Daily Notes',
+            created_at: '2026-04-15T00:00:00.000Z',
+            updated_at: '2026-04-15T00:00:00.000Z',
+            message_count: 1
+          },
+          messages: [{ role: 'assistant', content: 'daily cached answer' }],
+          contentText: 'daily cached answer',
+          lastViewedAt: 9
+        };
+      }
+
+      return null;
+    });
+
+    apiMocks.getConversationMessages.mockImplementation(
+      (id: string, _userId: string, signal?: AbortSignal) =>
+        new Promise((resolve, reject) => {
+          if (id === 'c-1') {
+            alphaSignal = signal;
+            signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+            return;
+          }
+
+          resolve({
+            conversation: {
+              id,
+              user_id: 'u_001',
+              title: 'Daily Notes',
+              created_at: '2026-04-15T00:00:00.000Z',
+              updated_at: '2026-04-15T08:00:00.000Z',
+              message_count: 2
+            },
+            items: [
+              { role: 'user', content: 'daily fresh question' },
+              { role: 'assistant', content: 'daily fresh answer' }
+            ]
+          });
+        }) as Promise<any>
+    );
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Open Project Alpha$/i }));
+    expect(await screen.findByText('alpha cached answer')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /^Open Daily Notes$/i }));
+
+    await waitFor(() => {
+      expect(alphaSignal?.aborted).toBe(true);
+    });
+    expect(await screen.findByText('daily fresh answer')).toBeInTheDocument();
+    expect(screen.queryByText('alpha cached answer')).not.toBeInTheDocument();
   });
 });

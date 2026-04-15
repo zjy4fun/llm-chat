@@ -54,7 +54,7 @@ afterEach(() => {
 });
 
 describe('conversation persistence routes', () => {
-  it('creates, lists, loads and deletes conversations', async () => {
+  it('creates, renames, lists, loads and deletes conversations', async () => {
     const { app, db, dir } = setupTestApp();
 
     try {
@@ -66,11 +66,19 @@ describe('conversation persistence routes', () => {
       expect(createRes.status).toBe(201);
       expect(createRes.body.conversation.title).toBe('How do I persist chat history in sqlite?');
 
+      const id = createRes.body.conversation.id;
+      const renameRes = await request(app).patch(`/conversations/${id}`).send({
+        user_id: 'u_001',
+        title: 'SQLite history guide'
+      });
+      expect(renameRes.status).toBe(200);
+      expect(renameRes.body.conversation.title).toBe('SQLite history guide');
+
       const listRes = await request(app).get('/conversations').query({ user_id: 'u_001', page: 1, page_size: 10 });
       expect(listRes.status).toBe(200);
       expect(listRes.body.items).toHaveLength(1);
+      expect(listRes.body.items[0].title).toBe('SQLite history guide');
 
-      const id = createRes.body.conversation.id;
       const messagesRes = await request(app)
         .get(`/conversations/${id}/messages`)
         .query({ user_id: 'u_001' });

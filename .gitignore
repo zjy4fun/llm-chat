@@ -8,3 +8,4 @@ server/.env
 .idea
 .codex
 .claude
+*.db

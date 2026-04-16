@@ -293,4 +293,48 @@ describe('tool calling loop', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('skips the streaming tool loop when the request does not need tools', async () => {
+    const providerCalls: ProviderParams[] = [];
+    const provider = {
+      async chatNonStream(): Promise<ProviderCompletion> {
+        throw new Error('non-stream should not be called in no-tools stream test');
+      },
+      async chatStream(params: ProviderParams): Promise<ProviderStreamResult> {
+        providerCalls.push(params);
+        return createStreamResult([
+          { choices: [{ delta: { content: 'Plain ' } }] },
+          {
+            choices: [{ delta: { content: 'stream reply.' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 7, completion_tokens: 4, total_tokens: 11 }
+          }
+        ]);
+      }
+    };
+
+    const { app, db, dir } = setupToolCallingApp(provider);
+
+    try {
+      const response = await request(app)
+        .post('/chat/stream')
+        .set('Accept', 'text/event-stream')
+        .send({
+          messages: [{ role: 'user', content: 'Write a short greeting with no tools.' }],
+          model: 'auto',
+          mode: 'stream',
+          session_id: 'tool-stream-no-tools-session',
+          user_id: 'u_001',
+          trace_id: 'trace-tools-stream-no-tools'
+        });
+
+      expect(response.status).toBe(200);
+      expect(providerCalls).toHaveLength(1);
+      expect(providerCalls[0]?.tools).toBeUndefined();
+      expect(response.text).not.toContain('event: tool');
+      expect(response.text).toContain('Plain stream reply.');
+    } finally {
+      closeDb(db);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

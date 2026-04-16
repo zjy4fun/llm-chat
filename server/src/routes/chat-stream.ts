@@ -10,13 +10,13 @@ import {
 } from '../core/db.js';
 import { logChat } from '../core/logger.js';
 import { buildMessages } from '../core/prompt.js';
-import { chatStream, type ProviderParams } from '../core/provider.js';
+import { chatStream, toProviderMessages, type ProviderParams } from '../core/provider.js';
 import { initSSE, sendSSE } from '../core/sse.js';
 import { runStreamToolLoop, shouldUseTools } from '../core/tool-loop.js';
 import { chooseModel } from '../core/router.js';
 import { consumeBalance } from '../mock/db.js';
 import type { ChatMessage } from '../types/chat.js';
-import type { ProviderStreamResult } from '../types/provider.js';
+import type { ProviderStreamResult, ProviderUsage } from '../types/provider.js';
 
 const chatStreamSchema = z.object({
   messages: z.array(
@@ -80,28 +80,64 @@ export function createChatStreamRouter({
       });
 
       const mergedMessages = buildMessages(input.messages as ChatMessage[]);
-      const result = await runStreamToolLoop(provider, {
-        model: selectedModel,
-        messages: mergedMessages,
-        temperature: input.temperature,
-        max_tokens: input.max_tokens,
-        onController: (controller) => {
-          activeController = controller;
-        },
-        onTextDelta: (delta) => {
-          sendSSE(res, 'message', {
-            type: 'delta',
-            text: delta,
-            trace_id: input?.trace_id
-          });
-        },
-        onToolMessage: (message) => {
-          sendSSE(res, 'tool', {
-            type: 'tool',
-            message
-          });
-        }
-      });
+      const result = needTools
+        ? await runStreamToolLoop(provider, {
+            model: selectedModel,
+            messages: mergedMessages,
+            temperature: input.temperature,
+            max_tokens: input.max_tokens,
+            onController: (controller) => {
+              activeController = controller;
+            },
+            onTextDelta: (delta) => {
+              sendSSE(res, 'message', {
+                type: 'delta',
+                text: delta,
+                trace_id: input?.trace_id
+              });
+            },
+            onToolMessage: (message) => {
+              sendSSE(res, 'tool', {
+                type: 'tool',
+                message
+              });
+            }
+          })
+        : await (async () => {
+            const stream = await provider.chatStream({
+              model: selectedModel,
+              messages: toProviderMessages(mergedMessages),
+              temperature: input.temperature,
+              max_tokens: input.max_tokens
+            });
+
+            activeController = stream.controller;
+
+            let text = '';
+            let usage: ProviderUsage = {};
+
+            for await (const chunk of stream) {
+              const delta = chunk.choices?.[0]?.delta?.content ?? '';
+              if (delta) {
+                text += delta;
+                sendSSE(res, 'message', {
+                  type: 'delta',
+                  text: delta,
+                  trace_id: input?.trace_id
+                });
+              }
+
+              if (chunk.usage) {
+                usage = chunk.usage;
+              }
+            }
+
+            return {
+              text,
+              usage,
+              toolMessages: []
+            };
+          })();
 
       const latencyMs = Date.now() - begin;
       const conversationId = input.conversation_id ?? input.session_id;

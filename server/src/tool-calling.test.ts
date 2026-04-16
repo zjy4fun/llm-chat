@@ -203,4 +203,94 @@ describe('tool calling loop', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('buffers streamed text until the turn is known not to contain tool calls', async () => {
+    let streamCallCount = 0;
+    const provider = {
+      async chatNonStream(): Promise<ProviderCompletion> {
+        throw new Error('non-stream should not be called in buffered stream test');
+      },
+      async chatStream(): Promise<ProviderStreamResult> {
+        streamCallCount += 1;
+
+        if (streamCallCount === 1) {
+          return createStreamResult([
+            { choices: [{ delta: { content: 'Let me think first. ' } }] },
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: 'call_calc_buffered',
+                        type: 'function',
+                        function: {
+                          name: 'calculate',
+                          arguments: ''
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        function: {
+                          arguments: '{"expression":"2+3*4"}'
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+              usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+            }
+          ]);
+        }
+
+        return createStreamResult([
+          { choices: [{ delta: { content: 'The buffered-safe answer is ' } }] },
+          {
+            choices: [{ delta: { content: '14.' }, finish_reason: 'stop' }],
+            usage: { prompt_tokens: 14, completion_tokens: 4, total_tokens: 18 }
+          }
+        ]);
+      }
+    };
+
+    const { app, db, dir } = setupToolCallingApp(provider);
+
+    try {
+      const response = await request(app)
+        .post('/chat/stream')
+        .set('Accept', 'text/event-stream')
+        .send({
+          messages: [{ role: 'user', content: 'Calculate 2+3*4 after deciding whether you need a tool.' }],
+          model: 'auto',
+          mode: 'stream',
+          session_id: 'tool-stream-buffered-session',
+          user_id: 'u_001',
+          trace_id: 'trace-tools-stream-buffered'
+        });
+
+      expect(response.status).toBe(200);
+      expect(streamCallCount).toBe(2);
+      expect(response.text).not.toContain('Let me think first.');
+      expect(response.text).toContain('Calling calculate');
+      expect(response.text).toContain('The buffered-safe answer is 14.');
+    } finally {
+      closeDb(db);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

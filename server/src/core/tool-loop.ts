@@ -173,6 +173,7 @@ export async function runStreamToolLoop(
     let turnText = '';
     let finishReason: string | null | undefined;
     const toolCalls: ChatToolCall[] = [];
+    const bufferedTextDeltas: string[] = [];
 
     for await (const chunk of stream) {
       usage = addUsage(usage, chunk.usage);
@@ -187,9 +188,7 @@ export async function runStreamToolLoop(
       const deltaText = choice.delta?.content ?? '';
       if (deltaText) {
         turnText += deltaText;
-        if (toolCalls.length === 0) {
-          params.onTextDelta(deltaText);
-        }
+        bufferedTextDeltas.push(deltaText);
       }
 
       finishReason = choice.finish_reason ?? finishReason;
@@ -199,6 +198,9 @@ export async function runStreamToolLoop(
     const hasToolCalls = finishReason === 'tool_calls' || normalizedToolCalls.length > 0;
 
     if (!hasToolCalls) {
+      for (const deltaText of bufferedTextDeltas) {
+        params.onTextDelta(deltaText);
+      }
       return { text: turnText, usage, toolMessages };
     }
 

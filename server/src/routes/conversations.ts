@@ -8,6 +8,7 @@ import {
   getConversation,
   getConversationMessages,
   listConversations,
+  updateConversationTitle,
   type DB
 } from '../core/db.js';
 
@@ -25,6 +26,11 @@ const listConversationsSchema = z.object({
 
 const conversationAccessSchema = z.object({
   user_id: z.string().min(1)
+});
+
+const renameConversationSchema = z.object({
+  user_id: z.string().min(1),
+  title: z.string().trim().min(1)
 });
 
 export function createConversationRouter({ db }: { db: DB }) {
@@ -84,6 +90,37 @@ export function createConversationRouter({ db }: { db: DB }) {
       });
     } catch (error: any) {
       res.status(error?.status || 400).json({ error: error?.message ?? 'failed to load messages' });
+    }
+  });
+
+  router.patch('/:id', (req, res) => {
+    try {
+      const input = renameConversationSchema.parse(req.body);
+      authGuard(input.user_id);
+
+      const conversation = getConversation(db, {
+        conversationId: req.params.id,
+        userId: input.user_id
+      });
+      if (!conversation) {
+        res.status(404).json({ error: 'conversation not found' });
+        return;
+      }
+
+      updateConversationTitle(db, {
+        conversationId: req.params.id,
+        userId: input.user_id,
+        title: input.title
+      });
+
+      res.json({
+        conversation: getConversation(db, {
+          conversationId: req.params.id,
+          userId: input.user_id
+        })
+      });
+    } catch (error: any) {
+      res.status(error?.status || 400).json({ error: error?.message ?? 'failed to rename conversation' });
     }
   });
 

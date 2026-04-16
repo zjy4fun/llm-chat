@@ -1,4 +1,11 @@
-import type { ChatMessage, ChatRequest } from './types';
+import type {
+  CachedConversationRecord,
+  ChatMessage,
+  ChatRequest,
+  ConversationListResponse,
+  ConversationMessagesResponse,
+  ConversationMutationResponse
+} from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787';
 
@@ -64,6 +71,65 @@ export async function sendStream(
   }
 }
 
+export async function createConversation(
+  userId: string,
+  title?: string,
+  firstMessage?: string
+): Promise<ConversationMutationResponse> {
+  const res = await fetch(`${BASE_URL}/conversations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, title, first_message: firstMessage })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function listConversations(userId: string, page = 1, pageSize = 20): Promise<ConversationListResponse> {
+  const params = new URLSearchParams({
+    user_id: userId,
+    page: String(page),
+    page_size: String(pageSize)
+  });
+  const res = await fetch(`${BASE_URL}/conversations?${params.toString()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getConversationMessages(
+  conversationId: string,
+  userId: string,
+  signal?: AbortSignal
+): Promise<ConversationMessagesResponse> {
+  const params = new URLSearchParams({ user_id: userId });
+  const res = await fetch(`${BASE_URL}/conversations/${conversationId}/messages?${params.toString()}`, { signal });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function renameConversation(
+  conversationId: string,
+  userId: string,
+  title: string
+): Promise<ConversationMutationResponse> {
+  const res = await fetch(`${BASE_URL}/conversations/${conversationId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId, title })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function deleteConversation(conversationId: string, userId: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/conversations/${conversationId}`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ user_id: userId })
+  });
+  if (!res.ok) throw new Error(await res.text());
+}
+
 export function makePayload(args: {
   history: ChatMessage[];
   prompt: string;
@@ -71,6 +137,7 @@ export function makePayload(args: {
   model: string;
   userId: string;
   sessionId: string;
+  conversationId?: string;
 }): ChatRequest {
   const traceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   return {
@@ -78,8 +145,21 @@ export function makePayload(args: {
     model: args.model,
     mode: args.mode,
     session_id: args.sessionId,
+    conversation_id: args.conversationId,
     user_id: args.userId,
     trace_id: traceId,
     temperature: 0.7
+  };
+}
+
+export function toCachedConversation(args: {
+  conversation: CachedConversationRecord['conversation'];
+  messages: ChatMessage[];
+}): CachedConversationRecord {
+  return {
+    conversation: args.conversation,
+    messages: args.messages,
+    contentText: args.messages.map((message) => message.content).join(' ').trim(),
+    lastViewedAt: Date.now()
   };
 }

@@ -332,9 +332,14 @@ export default function App() {
           conversationId: conversation.id
         });
         const result = await sendNonStream(payload);
-        const nextMessages = [...nextUserMessages, { role: 'assistant' as const, content: result.text }];
-        setMessages(nextMessages);
-        await updateConversationAfterSend(conversation, nextMessages);
+        const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: result.text }];
+        const visibleNextMessages = [
+          ...nextUserMessages,
+          ...(result.raw.tool_messages ?? []).map((message) => ({ ...message, displayOnly: true })),
+          { role: 'assistant' as const, content: result.text }
+        ];
+        setMessages(visibleNextMessages);
+        await updateConversationAfterSend(conversation, persistedNextMessages);
       } else {
         const payload = makePayload({
           history,
@@ -346,7 +351,7 @@ export default function App() {
           conversationId: conversation.id
         });
         let aiText = '';
-        setMessages((prev) => [...prev, { role: 'assistant', content: '' }]);
+        let assistantIndex = -1;
 
         await sendStream(
           payload,
@@ -354,14 +359,31 @@ export default function App() {
             aiText += delta;
             setMessages((prev) => {
               const copy = [...prev];
-              copy[copy.length - 1] = { role: 'assistant', content: aiText };
+              if (assistantIndex === -1) {
+                copy.push({ role: 'assistant', content: aiText });
+                assistantIndex = copy.length - 1;
+                return copy;
+              }
+              copy[assistantIndex] = { role: 'assistant', content: aiText };
               return copy;
             });
           },
           async () => {
-            const nextMessages = [...nextUserMessages, { role: 'assistant' as const, content: aiText }];
-            setMessages(nextMessages);
-            await updateConversationAfterSend(conversation, nextMessages);
+            setMessages((prev) => {
+              const copy = [...prev];
+              if (assistantIndex === -1) {
+                copy.push({ role: 'assistant', content: aiText });
+                assistantIndex = copy.length - 1;
+                return copy;
+              }
+              copy[assistantIndex] = { role: 'assistant', content: aiText };
+              return copy;
+            });
+            const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: aiText }];
+            await updateConversationAfterSend(conversation, persistedNextMessages);
+          },
+          (toolEvent) => {
+            setMessages((prev) => [...prev, { ...toolEvent.message, displayOnly: true }]);
           }
         );
       }

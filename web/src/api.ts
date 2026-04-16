@@ -4,26 +4,29 @@ import type {
   ChatRequest,
   ConversationListResponse,
   ConversationMessagesResponse,
-  ConversationMutationResponse
+  ConversationMutationResponse,
+  NonStreamChatResponse,
+  StreamToolEvent
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787';
 
-export async function sendNonStream(payload: ChatRequest): Promise<{ text: string; raw: any }> {
+export async function sendNonStream(payload: ChatRequest): Promise<{ text: string; raw: NonStreamChatResponse }> {
   const res = await fetch(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
   if (!res.ok) throw new Error(await res.text());
-  const data = await res.json();
-  return { text: data.message.content as string, raw: data };
+  const data = (await res.json()) as NonStreamChatResponse;
+  return { text: data.message.content, raw: data };
 }
 
 export async function sendStream(
   payload: ChatRequest,
   onDelta: (textDelta: string) => void,
-  onDone: (raw: unknown) => void
+  onDone: (raw: unknown) => void,
+  onTool: (event: StreamToolEvent) => void
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/chat/stream`, {
     method: 'POST',
@@ -62,6 +65,8 @@ export async function sendStream(
 
       if (eventName === 'message' && data.type === 'delta') {
         onDelta(String(data.text || ''));
+      } else if (eventName === 'tool' && data.type === 'tool' && data.message) {
+        onTool(data as StreamToolEvent);
       } else if (eventName === 'done') {
         onDone(data);
       } else if (eventName === 'error') {
@@ -141,7 +146,7 @@ export function makePayload(args: {
 }): ChatRequest {
   const traceId = `trace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   return {
-    messages: [...args.history, { role: 'user', content: args.prompt }],
+    messages: [...args.history.filter((message) => !message.displayOnly), { role: 'user', content: args.prompt }],
     model: args.model,
     mode: args.mode,
     session_id: args.sessionId,

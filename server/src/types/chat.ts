@@ -1,10 +1,20 @@
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool';
 
+export interface ChatToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
 export interface ChatMessage {
   role: ChatRole;
   content: string;
   name?: string;
   tool_call_id?: string;
+  tool_calls?: ChatToolCall[];
 }
 
 export type ChatMode = 'stream' | 'non-stream';

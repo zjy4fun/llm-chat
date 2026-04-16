@@ -3,6 +3,17 @@ export type Role = 'user' | 'assistant' | 'system' | 'tool';
 export interface ChatMessage {
   role: Role;
   content: string;
+  displayOnly?: boolean;
+}
+
+export interface NonStreamChatResponse {
+  message: ChatMessage;
+  tool_messages?: ChatMessage[];
+}
+
+export interface StreamToolEvent {
+  type: 'tool';
+  message: ChatMessage;
 }
 
 export type Mode = 'stream' | 'non-stream';

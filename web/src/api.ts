@@ -6,6 +6,7 @@ import type {
   ConversationMessagesResponse,
   ConversationMutationResponse,
   NonStreamChatResponse,
+  StreamDoneEvent,
   StreamToolEvent
 } from './types';
 
@@ -25,7 +26,7 @@ export async function sendNonStream(payload: ChatRequest): Promise<{ text: strin
 export async function sendStream(
   payload: ChatRequest,
   onDelta: (textDelta: string) => void,
-  onDone: (raw: unknown) => void,
+  onDone: (raw: StreamDoneEvent) => void,
   onTool: (event: StreamToolEvent) => void
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/chat/stream`, {
@@ -68,7 +69,7 @@ export async function sendStream(
       } else if (eventName === 'tool' && data.type === 'tool' && data.message) {
         onTool(data as StreamToolEvent);
       } else if (eventName === 'done') {
-        onDone(data);
+        onDone(data as StreamDoneEvent);
       } else if (eventName === 'error') {
         throw new Error(data.message || 'stream error');
       }

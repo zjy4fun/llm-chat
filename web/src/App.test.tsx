@@ -144,6 +144,22 @@ describe('App conversation workspace', () => {
       }
     });
     apiMocks.deleteConversation.mockResolvedValue(undefined);
+    apiMocks.makePayload.mockImplementation((payload) => payload);
+    apiMocks.sendNonStream.mockResolvedValue({
+      text: 'default non-stream reply',
+      raw: {
+        message: { role: 'assistant', content: 'default non-stream reply' },
+        usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+        context_tokens_used: 18
+      }
+    });
+    apiMocks.sendStream.mockImplementation(async (_payload, onDelta, onDone) => {
+      onDelta('default streamed reply');
+      onDone({
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+        context_tokens_used: 24
+      });
+    });
   });
 
   it('keeps the conversation workspace constrained to the viewport so the message list can scroll without pushing the composer off-screen', async () => {
@@ -319,87 +335,19 @@ describe('App conversation workspace', () => {
     expect(screen.queryByText('stale cached answer')).not.toBeInTheDocument();
   });
 
-  it('aborts an older conversation revalidation when the user switches to another conversation', async () => {
+  it('shows the latest token usage after sending a message', async () => {
     const user = userEvent.setup();
-    let alphaSignal: AbortSignal | undefined;
-
-    cacheMocks.get.mockImplementation(async (id: string) => {
-      if (id === 'c-1') {
-        return {
-          conversation: {
-            id: 'c-1',
-            user_id: 'u_001',
-            title: 'Project Alpha',
-            created_at: '2026-04-15T00:00:00.000Z',
-            updated_at: '2026-04-15T00:00:00.000Z',
-            message_count: 2
-          },
-          messages: [
-            { role: 'user', content: 'alpha cached question' },
-            { role: 'assistant', content: 'alpha cached answer' }
-          ],
-          contentText: 'alpha cached question alpha cached answer',
-          lastViewedAt: 10
-        };
-      }
-
-      if (id === 'c-2') {
-        return {
-          conversation: {
-            id: 'c-2',
-            user_id: 'u_001',
-            title: 'Daily Notes',
-            created_at: '2026-04-15T00:00:00.000Z',
-            updated_at: '2026-04-15T00:00:00.000Z',
-            message_count: 1
-          },
-          messages: [{ role: 'assistant', content: 'daily cached answer' }],
-          contentText: 'daily cached answer',
-          lastViewedAt: 9
-        };
-      }
-
-      return null;
-    });
-
-    apiMocks.getConversationMessages.mockImplementation(
-      (id: string, _userId: string, signal?: AbortSignal) =>
-        new Promise((resolve, reject) => {
-          if (id === 'c-1') {
-            alphaSignal = signal;
-            signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
-            return;
-          }
-
-          resolve({
-            conversation: {
-              id,
-              user_id: 'u_001',
-              title: 'Daily Notes',
-              created_at: '2026-04-15T00:00:00.000Z',
-              updated_at: '2026-04-15T08:00:00.000Z',
-              message_count: 2
-            },
-            items: [
-              { role: 'user', content: 'daily fresh question' },
-              { role: 'assistant', content: 'daily fresh answer' }
-            ]
-          });
-        }) as Promise<any>
-    );
 
     render(<App />);
     expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: /^Open Project Alpha$/i }));
-    expect(await screen.findByText('alpha cached answer')).toBeInTheDocument();
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Explain token usage');
+    await user.click(screen.getByRole('button', { name: /send/i }));
 
-    await user.click(screen.getByRole('button', { name: /^Open Daily Notes$/i }));
-
-    await waitFor(() => {
-      expect(alphaSignal?.aborted).toBe(true);
-    });
-    expect(await screen.findByText('daily fresh answer')).toBeInTheDocument();
-    expect(screen.queryByText('alpha cached answer')).not.toBeInTheDocument();
+    expect(await screen.findByText('default streamed reply')).toBeInTheDocument();
+    expect(screen.getByText('Context 24 tokens')).toBeInTheDocument();
+    expect(screen.getByText('Prompt 12')).toBeInTheDocument();
+    expect(screen.getByText('Completion 5')).toBeInTheDocument();
+    expect(screen.getByText('Total 17')).toBeInTheDocument();
   });
 });

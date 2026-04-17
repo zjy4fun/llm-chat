@@ -9,3 +9,4 @@ server/.env
 .codex
 .claude
 *.db
+server/data/**

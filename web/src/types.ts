@@ -6,7 +6,18 @@ export interface ChatMessage {
   displayOnly?: boolean;
 }
 
-export interface NonStreamChatResponse {
+export interface TokenUsage {
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
+export interface TokenUsageSummary {
+  context_tokens_used?: number | null;
+  usage?: TokenUsage | null;
+}
+
+export interface NonStreamChatResponse extends TokenUsageSummary {
   message: ChatMessage;
   tool_messages?: ChatMessage[];
 }
@@ -14,6 +25,12 @@ export interface NonStreamChatResponse {
 export interface StreamToolEvent {
   type: 'tool';
   message: ChatMessage;
+}
+
+export interface StreamDoneEvent extends TokenUsageSummary {
+  type?: 'done';
+  text?: string;
+  tool_messages?: ChatMessage[];
 }
 
 export type Mode = 'stream' | 'non-stream';

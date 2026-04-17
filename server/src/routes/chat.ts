@@ -8,9 +8,11 @@ import {
   getConversationMessageCount,
   type DB
 } from '../core/db.js';
+import { buildContextWindow } from '../core/context-window.js';
 import { logChat } from '../core/logger.js';
 import { buildMessages } from '../core/prompt.js';
 import { chatNonStream, toProviderMessages, type ProviderParams } from '../core/provider.js';
+import { countChatMessageTokens } from '../core/token-counter.js';
 import { runNonStreamToolLoop, shouldUseTools } from '../core/tool-loop.js';
 import { chooseModel } from '../core/router.js';
 import { consumeBalance } from '../mock/db.js';
@@ -59,17 +61,22 @@ export function createChatRouter({
       });
 
       const mergedMessages = buildMessages(input.messages as ChatMessage[]);
+      const contextWindow = buildContextWindow({
+        model: selectedModel,
+        messages: mergedMessages,
+        responseTokenReserve: input.max_tokens
+      });
       const result = needTools
         ? await runNonStreamToolLoop(provider, {
             model: selectedModel,
-            messages: mergedMessages,
+            messages: contextWindow.messages,
             temperature: input.temperature,
             max_tokens: input.max_tokens
           })
         : await (async () => {
             const completion = await provider.chatNonStream({
               model: selectedModel,
-              messages: toProviderMessages(mergedMessages),
+              messages: toProviderMessages(contextWindow.messages),
               temperature: input.temperature,
               max_tokens: input.max_tokens
             });
@@ -101,12 +108,12 @@ export function createChatRouter({
         ...newInputMessages.map((message) => ({
           role: message.role,
           content: message.content,
-          tokenCount: null
+          tokenCount: countChatMessageTokens(selectedModel, message as ChatMessage)
         })),
         {
           role: 'assistant' as const,
           content: result.text,
-          tokenCount: result.usage?.completion_tokens ?? result.usage?.total_tokens ?? null
+          tokenCount: result.usage?.completion_tokens ?? countChatMessageTokens(selectedModel, { role: 'assistant', content: result.text })
         }
       ]);
 
@@ -130,6 +137,7 @@ export function createChatRouter({
         conversation_id: conversationId,
         model: selectedModel,
         tool_messages: result.toolMessages,
+        context_tokens_used: contextWindow.contextTokensUsed,
         message: { role: 'assistant', content: result.text },
         usage: {
           prompt_tokens: result.usage?.prompt_tokens ?? null,

@@ -26,7 +26,14 @@ import {
 } from './components/ui/select';
 import { ScrollArea } from './components/ui/scroll-area';
 import { createConversationCache } from './lib/conversation-cache';
-import type { CachedConversationRecord, ChatMessage as ChatMessageData, ConversationSummary, Mode } from './types';
+import type {
+  CachedConversationRecord,
+  ChatMessage as ChatMessageData,
+  ConversationSummary,
+  Mode,
+  StreamDoneEvent,
+  TokenUsageSummary
+} from './types';
 
 const COMMON_MODELS = [
   { value: 'auto', label: 'Auto router' },
@@ -45,6 +52,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState('s_demo_001');
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
+  const [latestTokenUsage, setLatestTokenUsage] = useState<TokenUsageSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -61,6 +69,18 @@ export default function App() {
   );
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
+  const hasTokenUsage = useMemo(() => {
+    if (!latestTokenUsage) {
+      return false;
+    }
+
+    return [
+      latestTokenUsage.context_tokens_used,
+      latestTokenUsage.usage?.prompt_tokens,
+      latestTokenUsage.usage?.completion_tokens,
+      latestTokenUsage.usage?.total_tokens
+    ].some((value) => typeof value === 'number');
+  }, [latestTokenUsage]);
 
   const modelOptions = useMemo(() => {
     if (COMMON_MODELS.some((option) => option.value === model)) {
@@ -203,6 +223,7 @@ export default function App() {
   const handleSelectConversation = async (conversation: ConversationSummary) => {
     setCurrentConversationId(conversation.id);
     setSessionId(conversation.id);
+    setLatestTokenUsage(null);
     activeConversationIdRef.current = conversation.id;
 
     revalidationControllerRef.current?.abort();
@@ -245,6 +266,7 @@ export default function App() {
     setCurrentConversationId(response.conversation.id);
     setSessionId(response.conversation.id);
     setMessages([]);
+    setLatestTokenUsage(null);
     await syncCachedConversation(response.conversation, []);
   };
 
@@ -276,6 +298,7 @@ export default function App() {
     if (currentConversationId === conversation.id) {
       setCurrentConversationId(null);
       setMessages([]);
+      setLatestTokenUsage(null);
       setSessionId('s_demo_001');
     }
   };
@@ -319,6 +342,7 @@ export default function App() {
       const conversation = await ensureConversationForSend(prompt);
       const history = [...messages];
       const nextUserMessages = [...history, { role: 'user' as const, content: prompt }];
+      setLatestTokenUsage(null);
       setMessages(nextUserMessages);
 
       if (mode === 'non-stream') {
@@ -332,6 +356,10 @@ export default function App() {
           conversationId: conversation.id
         });
         const result = await sendNonStream(payload);
+        setLatestTokenUsage({
+          context_tokens_used: result.raw.context_tokens_used ?? null,
+          usage: result.raw.usage ?? null
+        });
         const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: result.text }];
         const visibleNextMessages = [
           ...nextUserMessages,
@@ -368,7 +396,11 @@ export default function App() {
               return copy;
             });
           },
-          async () => {
+          async (doneEvent: StreamDoneEvent) => {
+            setLatestTokenUsage({
+              context_tokens_used: doneEvent.context_tokens_used ?? null,
+              usage: doneEvent.usage ?? null
+            });
             setMessages((prev) => {
               const copy = [...prev];
               if (assistantIndex === -1) {
@@ -511,6 +543,30 @@ export default function App() {
 
             <div className="shrink-0 border-t border-border px-4 py-4">
               <div className="mx-auto w-full max-w-4xl">
+                {hasTokenUsage ? (
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    {typeof latestTokenUsage?.context_tokens_used === 'number' ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                        Context {latestTokenUsage.context_tokens_used} tokens
+                      </span>
+                    ) : null}
+                    {typeof latestTokenUsage?.usage?.prompt_tokens === 'number' ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                        Prompt {latestTokenUsage.usage.prompt_tokens}
+                      </span>
+                    ) : null}
+                    {typeof latestTokenUsage?.usage?.completion_tokens === 'number' ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                        Completion {latestTokenUsage.usage.completion_tokens}
+                      </span>
+                    ) : null}
+                    {typeof latestTokenUsage?.usage?.total_tokens === 'number' ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                        Total {latestTokenUsage.usage.total_tokens}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
                 <ChatInput
                   disabled={!canSend}
                   loading={loading}

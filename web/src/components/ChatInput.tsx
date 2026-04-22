@@ -1,25 +1,29 @@
 import type { KeyboardEvent } from 'react';
-import { CornerDownLeft, LoaderCircle, SendHorizontal } from 'lucide-react';
+import { CornerDownLeft, LoaderCircle, SendHorizontal, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import type { Mode } from '@/types';
 
 interface ChatInputProps {
   disabled: boolean;
+  canStop?: boolean;
   loading: boolean;
   mode: Mode;
   onKeyDown: (event: KeyboardEvent<HTMLTextAreaElement>) => void;
   onSend: () => void;
+  onStop?: () => void;
   onValueChange: (value: string) => void;
   value: string;
 }
 
 export function ChatInput({
   disabled,
+  canStop = false,
   loading,
   mode,
   onKeyDown,
   onSend,
+  onStop,
   onValueChange,
   value
 }: ChatInputProps) {
@@ -50,10 +54,18 @@ export function ChatInput({
             )}
           </div>
 
-          <Button disabled={disabled} onClick={onSend} size="lg">
-            {loading ? <LoaderCircle className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
-            {loading ? (mode === 'stream' ? 'Streaming' : 'Sending') : 'Send'}
-          </Button>
+          <div className="flex items-center gap-2">
+            {loading && mode === 'stream' && canStop ? (
+              <Button onClick={onStop} size="lg" type="button" variant="secondary">
+                <Square className="size-4 fill-current" />
+                Stop
+              </Button>
+            ) : null}
+            <Button disabled={disabled} onClick={onSend} size="lg">
+              {loading ? <LoaderCircle className="size-4 animate-spin" /> : <SendHorizontal className="size-4" />}
+              {loading ? (mode === 'stream' ? 'Streaming' : 'Sending') : 'Send'}
+            </Button>
+          </div>
         </div>
       </div>
     </div>

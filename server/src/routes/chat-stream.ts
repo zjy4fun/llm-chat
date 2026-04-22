@@ -53,6 +53,7 @@ export function createChatStreamRouter({
     const begin = Date.now();
     let input: z.infer<typeof chatStreamSchema> | null = null;
     let activeController: ProviderStreamResult['controller'] | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
 
     try {
       input = chatStreamSchema.parse(req.body);
@@ -68,6 +69,12 @@ export function createChatStreamRouter({
       });
 
       initSSE(res);
+      heartbeat = setInterval(() => {
+        sendSSE(res, 'ping', {
+          type: 'ping',
+          ts: Date.now()
+        });
+      }, 15_000);
       sendSSE(res, 'meta', {
         type: 'meta',
         trace_id: input.trace_id,
@@ -77,6 +84,10 @@ export function createChatStreamRouter({
       });
 
       req.on('close', () => {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = null;
+        }
         try {
           activeController?.abort();
         } catch {
@@ -203,11 +214,20 @@ export function createChatStreamRouter({
         totalTokens: result.usage.total_tokens ?? undefined
       });
 
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
+      }
       res.end();
     } catch (error: any) {
       const code = error?.code || 'CHAT_STREAM_ERROR';
       if (error?.rateLimit && !res.headersSent) {
         applyRateLimitHeaders(res, error.rateLimit);
+      }
+
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
       }
 
       if (!res.headersSent) {

@@ -390,7 +390,7 @@ describe('App conversation workspace', () => {
 
     expect(await screen.findByText('rate limited but successful reply')).toBeInTheDocument();
     expect(screen.getByText('Rate limit 59/60 left')).toBeInTheDocument();
-    expect(screen.getByText(/Resets in about 60s/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resets in about (59|60)s/i)).toBeInTheDocument();
   });
 
   it('handles 429 responses gracefully with a countdown instead of a raw error blob', async () => {

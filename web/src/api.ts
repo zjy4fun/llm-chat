@@ -87,12 +87,16 @@ export async function sendStream(
   payload: ChatRequest,
   onDelta: (textDelta: string) => void,
   onDone: (raw: StreamDoneEvent) => void,
-  onTool: (event: StreamToolEvent) => void
+  onTool: (event: StreamToolEvent) => void,
+  options?: {
+    signal?: AbortSignal;
+  }
 ): Promise<void> {
   const res = await fetch(`${BASE_URL}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: options?.signal
   });
   const rateLimit = parseRateLimitHeaders(res.headers);
 

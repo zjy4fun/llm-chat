@@ -96,6 +96,12 @@ export default function App() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const activeConversationIdRef = useRef<string | null>(null);
   const revalidationControllerRef = useRef<AbortController | null>(null);
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const streamRafRef = useRef<number | null>(null);
+  const streamAssistantIndexRef = useRef<number>(-1);
+  const streamTextRef = useRef('');
+  const streamConversationRef = useRef<ConversationSummary | null>(null);
+  const streamPendingUserMessagesRef = useRef<ChatMessageData[] | null>(null);
   const cache = useMemo(() => createConversationCache(), []);
 
   const currentConversation = useMemo(
@@ -151,6 +157,10 @@ export default function App() {
   useEffect(() => {
     return () => {
       revalidationControllerRef.current?.abort();
+      streamAbortControllerRef.current?.abort();
+      if (streamRafRef.current !== null) {
+        window.cancelAnimationFrame(streamRafRef.current);
+      }
     };
   }, []);
 
@@ -383,6 +393,48 @@ export default function App() {
     }
   };
 
+  const flushStreamToState = () => {
+    setMessages((prev) => {
+      const copy = [...prev];
+      if (streamAssistantIndexRef.current === -1) {
+        copy.push({ role: 'assistant', content: streamTextRef.current });
+        streamAssistantIndexRef.current = copy.length - 1;
+        return copy;
+      }
+      copy[streamAssistantIndexRef.current] = { role: 'assistant', content: streamTextRef.current };
+      return copy;
+    });
+  };
+
+  const scheduleStreamFlush = () => {
+    if (streamRafRef.current !== null) {
+      return;
+    }
+    streamRafRef.current = window.requestAnimationFrame(() => {
+      streamRafRef.current = null;
+      flushStreamToState();
+    });
+  };
+
+  const handleStopGenerating = async () => {
+    if (!loading || mode !== 'stream') {
+      return;
+    }
+
+    streamAbortControllerRef.current?.abort();
+
+    if (!streamConversationRef.current || !streamPendingUserMessagesRef.current || !streamTextRef.current) {
+      return;
+    }
+
+    flushStreamToState();
+    const persistedNextMessages = [
+      ...streamPendingUserMessagesRef.current,
+      { role: 'assistant' as const, content: streamTextRef.current }
+    ];
+    await updateConversationAfterSend(streamConversationRef.current, persistedNextMessages);
+  };
+
   const onSend = async () => {
     const prompt = input.trim();
     if (!prompt) return;
@@ -432,23 +484,18 @@ export default function App() {
           sessionId: conversation.id,
           conversationId: conversation.id
         });
-        let aiText = '';
-        let assistantIndex = -1;
+        streamTextRef.current = '';
+        streamAssistantIndexRef.current = -1;
+        streamConversationRef.current = conversation;
+        streamPendingUserMessagesRef.current = nextUserMessages;
+        const streamController = new AbortController();
+        streamAbortControllerRef.current = streamController;
 
         await sendStream(
           payload,
           (delta) => {
-            aiText += delta;
-            setMessages((prev) => {
-              const copy = [...prev];
-              if (assistantIndex === -1) {
-                copy.push({ role: 'assistant', content: aiText });
-                assistantIndex = copy.length - 1;
-                return copy;
-              }
-              copy[assistantIndex] = { role: 'assistant', content: aiText };
-              return copy;
-            });
+            streamTextRef.current += delta;
+            scheduleStreamFlush();
           },
           async (doneEvent: StreamDoneEvent) => {
             setLatestTokenUsage({
@@ -456,25 +503,28 @@ export default function App() {
               usage: doneEvent.usage ?? null
             });
             setRateLimitStatus(doneEvent.rate_limit ?? null);
-            setMessages((prev) => {
-              const copy = [...prev];
-              if (assistantIndex === -1) {
-                copy.push({ role: 'assistant', content: aiText });
-                assistantIndex = copy.length - 1;
-                return copy;
-              }
-              copy[assistantIndex] = { role: 'assistant', content: aiText };
-              return copy;
-            });
-            const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: aiText }];
+            flushStreamToState();
+            const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: streamTextRef.current }];
             await updateConversationAfterSend(conversation, persistedNextMessages);
           },
           (toolEvent) => {
             setMessages((prev) => [...prev, { ...toolEvent.message, displayOnly: true }]);
-          }
+          },
+          { signal: streamController.signal }
         );
       }
     } catch (e: any) {
+      const wasAborted = e instanceof DOMException && e.name === 'AbortError';
+      if (wasAborted && mode === 'stream') {
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: 'Generation stopped.'
+          }
+        ]);
+        return;
+      }
       if (e instanceof RateLimitError || e?.status === 429) {
         const rateLimit = e.rateLimit ?? null;
         setRateLimitStatus(rateLimit);
@@ -490,6 +540,13 @@ export default function App() {
         setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
       }
     } finally {
+      streamAbortControllerRef.current = null;
+      streamConversationRef.current = null;
+      streamPendingUserMessagesRef.current = null;
+      if (streamRafRef.current !== null) {
+        window.cancelAnimationFrame(streamRafRef.current);
+        streamRafRef.current = null;
+      }
       setLoading(false);
     }
   };
@@ -651,6 +708,7 @@ export default function App() {
                   </div>
                 ) : null}
                 <ChatInput
+                  canStop={loading && mode === 'stream'}
                   disabled={!canSend}
                   loading={loading}
                   mode={mode}
@@ -666,6 +724,9 @@ export default function App() {
                     if (canSend) {
                       void onSend();
                     }
+                  }}
+                  onStop={() => {
+                    void handleStopGenerating();
                   }}
                   onValueChange={setInput}
                   value={input}

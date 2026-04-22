@@ -26,10 +26,19 @@ export class RateLimitError extends Error {
 }
 
 function parseRateLimitHeaders(headers: Headers): RateLimitStatus | null {
-  const limit = Number(headers.get('x-ratelimit-limit'));
-  const remaining = Number(headers.get('x-ratelimit-remaining'));
-  const resetSeconds = Number(headers.get('x-ratelimit-reset'));
-  const retryAfterSeconds = Number(headers.get('retry-after') ?? '0');
+  const limitHeader = headers.get('x-ratelimit-limit');
+  const remainingHeader = headers.get('x-ratelimit-remaining');
+  const resetHeader = headers.get('x-ratelimit-reset');
+
+  if (limitHeader === null || remainingHeader === null || resetHeader === null) {
+    return null;
+  }
+
+  const limit = Number(limitHeader);
+  const remaining = Number(remainingHeader);
+  const resetSeconds = Number(resetHeader);
+  const retryAfterHeader = headers.get('retry-after');
+  const retryAfterSeconds = retryAfterHeader === null ? 0 : Number(retryAfterHeader);
 
   if (![limit, remaining, resetSeconds].every((value) => Number.isFinite(value))) {
     return null;

@@ -7,7 +7,6 @@ const payload: ChatRequest = {
   model: 'auto',
   mode: 'non-stream',
   session_id: 'session-1',
-  user_id: 'u_001',
   trace_id: 'trace-1'
 };
 

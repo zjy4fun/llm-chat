@@ -8,10 +8,54 @@ import type {
   NonStreamChatResponse,
   RateLimitStatus,
   StreamDoneEvent,
-  StreamToolEvent
+  StreamToolEvent,
+  UsageSummary,
+  UserProfile
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787';
+
+let accessToken: string | null = null;
+let refreshToken: string | null = null;
+
+export interface AuthResponse {
+  user: UserProfile;
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+export function setAuthTokens(tokens: { accessToken: string; refreshToken: string }) {
+  accessToken = tokens.accessToken;
+  refreshToken = tokens.refreshToken;
+}
+
+function authHeaders(headers: Record<string, string> = {}) {
+  if (!accessToken) return headers;
+  return {
+    ...headers,
+    Authorization: `Bearer ${accessToken}`
+  };
+}
+
+async function withAuthRetry(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  const first = await fetch(input, {
+    ...init,
+    headers: authHeaders((init.headers as Record<string, string>) ?? {})
+  });
+
+  if (first.status !== 401 || !refreshToken) {
+    return first;
+  }
+
+  const refreshed = await refreshAuthToken(refreshToken);
+  setAuthTokens({ accessToken: refreshed.access_token, refreshToken: refreshed.refresh_token });
+
+  return fetch(input, {
+    ...init,
+    headers: authHeaders((init.headers as Record<string, string>) ?? {})
+  });
+}
 
 export class RateLimitError extends Error {
   status: number;
@@ -66,8 +110,44 @@ async function buildRateLimitError(res: Response, fallbackMessage: string): Prom
   return new RateLimitError(message, res.status, parseRateLimitHeaders(res.headers));
 }
 
+export async function register(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${BASE_URL}/auth/register`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function login(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${BASE_URL}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function refreshAuthToken(token: string): Promise<Omit<AuthResponse, 'user'>> {
+  const res = await fetch(`${BASE_URL}/auth/refresh`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_token: token })
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function getUsageMe(): Promise<UsageSummary> {
+  const res = await withAuthRetry(`${BASE_URL}/usage/me`, { method: 'GET' });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 export async function sendNonStream(payload: ChatRequest): Promise<{ text: string; raw: NonStreamChatResponse }> {
-  const res = await fetch(`${BASE_URL}/chat`, {
+  const res = await withAuthRetry(`${BASE_URL}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -89,7 +169,7 @@ export async function sendStream(
   onDone: (raw: StreamDoneEvent) => void,
   onTool: (event: StreamToolEvent) => void
 ): Promise<void> {
-  const res = await fetch(`${BASE_URL}/chat/stream`, {
+  const res = await withAuthRetry(`${BASE_URL}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(payload)
@@ -141,61 +221,52 @@ export async function sendStream(
   }
 }
 
-export async function createConversation(
-  userId: string,
-  title?: string,
-  firstMessage?: string
-): Promise<ConversationMutationResponse> {
-  const res = await fetch(`${BASE_URL}/conversations`, {
+export async function createConversation(title?: string, firstMessage?: string): Promise<ConversationMutationResponse> {
+  const res = await withAuthRetry(`${BASE_URL}/conversations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, title, first_message: firstMessage })
+    body: JSON.stringify({ title, first_message: firstMessage })
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function listConversations(userId: string, page = 1, pageSize = 20): Promise<ConversationListResponse> {
+export async function listConversations(page = 1, pageSize = 20): Promise<ConversationListResponse> {
   const params = new URLSearchParams({
-    user_id: userId,
     page: String(page),
     page_size: String(pageSize)
   });
-  const res = await fetch(`${BASE_URL}/conversations?${params.toString()}`);
+  const res = await withAuthRetry(`${BASE_URL}/conversations?${params.toString()}`, { method: 'GET' });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function getConversationMessages(
   conversationId: string,
-  userId: string,
   signal?: AbortSignal
 ): Promise<ConversationMessagesResponse> {
-  const params = new URLSearchParams({ user_id: userId });
-  const res = await fetch(`${BASE_URL}/conversations/${conversationId}/messages?${params.toString()}`, { signal });
+  const res = await withAuthRetry(`${BASE_URL}/conversations/${conversationId}/messages`, { method: 'GET', signal });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
 export async function renameConversation(
   conversationId: string,
-  userId: string,
   title: string
 ): Promise<ConversationMutationResponse> {
-  const res = await fetch(`${BASE_URL}/conversations/${conversationId}`, {
+  const res = await withAuthRetry(`${BASE_URL}/conversations/${conversationId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, title })
+    body: JSON.stringify({ title })
   });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-export async function deleteConversation(conversationId: string, userId: string): Promise<void> {
-  const res = await fetch(`${BASE_URL}/conversations/${conversationId}`, {
+export async function deleteConversation(conversationId: string): Promise<void> {
+  const res = await withAuthRetry(`${BASE_URL}/conversations/${conversationId}`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId })
+    headers: { 'Content-Type': 'application/json' }
   });
   if (!res.ok) throw new Error(await res.text());
 }
@@ -205,7 +276,6 @@ export function makePayload(args: {
   prompt: string;
   mode: 'stream' | 'non-stream';
   model: string;
-  userId: string;
   sessionId: string;
   conversationId?: string;
 }): ChatRequest {
@@ -216,7 +286,6 @@ export function makePayload(args: {
     mode: args.mode,
     session_id: args.sessionId,
     conversation_id: args.conversationId,
-    user_id: args.userId,
     trace_id: traceId,
     temperature: 0.7
   };

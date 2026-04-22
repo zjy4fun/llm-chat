@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { authGuard } from '../core/auth.js';
 import { applyRateLimitHeaders, consumeRateLimit } from '../core/rate-limit.js';
 import {
   appendMessages,
+  assertDailyQuotaAvailable,
   ensureConversation,
   generateConversationTitle,
   getConversationMessageCount,
+  recordUsage,
   type DB
 } from '../core/db.js';
 import { buildContextWindow } from '../core/context-window.js';
@@ -16,7 +17,6 @@ import { chatNonStream, toProviderMessages, type ProviderParams } from '../core/
 import { countChatMessageTokens } from '../core/token-counter.js';
 import { runNonStreamToolLoop, shouldUseTools } from '../core/tool-loop.js';
 import { chooseModel } from '../core/router.js';
-import { consumeBalance } from '../mock/db.js';
 import type { ChatMessage } from '../types/chat.js';
 import type { ProviderCompletion } from '../types/provider.js';
 
@@ -33,7 +33,6 @@ const chatSchema = z.object({
   mode: z.literal('non-stream'),
   session_id: z.string(),
   conversation_id: z.string().optional(),
-  user_id: z.string(),
   trace_id: z.string(),
   temperature: z.number().optional(),
   max_tokens: z.number().optional()
@@ -52,7 +51,9 @@ export function createChatRouter({
     const begin = Date.now();
     try {
       const input = chatSchema.parse(req.body);
-      const auth = authGuard(input.user_id);
+      const auth = req.auth;
+      if (!auth) throw Object.assign(new Error('unauthorized'), { status: 401, code: 'AUTH_MISSING_TOKEN' });
+      assertDailyQuotaAvailable(db, auth.userId);
       const rateLimit = consumeRateLimit(auth);
       applyRateLimitHeaders(res, rateLimit);
 
@@ -97,13 +98,13 @@ export function createChatRouter({
 
       ensureConversation(db, {
         conversationId,
-        userId: input.user_id,
+        userId: auth.userId,
         title: generateConversationTitle(firstUserMessage)
       });
 
       const persistedCount = getConversationMessageCount(db, {
         conversationId,
-        userId: input.user_id
+        userId: auth.userId
       });
       const newInputMessages = input.messages.slice(persistedCount);
 
@@ -120,11 +121,17 @@ export function createChatRouter({
         }
       ]);
 
-      consumeBalance(input.user_id, 1);
+      recordUsage(db, {
+        userId: auth.userId,
+        model: selectedModel,
+        promptTokens: result.usage?.prompt_tokens ?? null,
+        completionTokens: result.usage?.completion_tokens ?? null,
+        totalTokens: result.usage?.total_tokens ?? null
+      });
 
       logChat({
         traceId: input.trace_id,
-        userId: input.user_id,
+        userId: auth.userId,
         sessionId: input.session_id,
         model: selectedModel,
         mode: 'non-stream',
@@ -157,7 +164,7 @@ export function createChatRouter({
       }
       logChat({
         traceId: req.body?.trace_id ?? 'unknown',
-        userId: req.body?.user_id ?? 'unknown',
+        userId: req.auth?.userId ?? 'unknown',
         sessionId: req.body?.session_id ?? 'unknown',
         model: req.body?.model ?? 'unknown',
         mode: 'non-stream',

@@ -7,39 +7,69 @@ const PLAN_LIMITS: Record<AuthContext['plan'], number> = {
   pro: 60
 };
 
-type Bucket = {
-  timestamps: number[];
-};
-
 export interface RateLimitStatus {
   limit: number;
   remaining: number;
   resetAt: number;
   retryAfterSeconds: number;
-};
+}
 
-const buckets = new Map<string, Bucket>();
+export interface RateLimitConsumeParams {
+  key: string;
+  limit: number;
+  windowMs: number;
+  now: number;
+}
 
-function getBucket(userId: string): Bucket {
-  const bucket = buckets.get(userId);
-  if (bucket) {
-    return bucket;
+export interface RateLimitStore {
+  consume(params: RateLimitConsumeParams): RateLimitStatus;
+  reset?(): void;
+}
+
+class InMemoryRateLimitStore implements RateLimitStore {
+  private buckets = new Map<string, { timestamps: number[] }>();
+
+  consume(params: RateLimitConsumeParams): RateLimitStatus {
+    const bucket = this.buckets.get(params.key) ?? { timestamps: [] };
+    const floor = params.now - params.windowMs;
+    bucket.timestamps = bucket.timestamps.filter((timestamp) => timestamp > floor);
+
+    if (bucket.timestamps.length >= params.limit) {
+      this.buckets.set(params.key, bucket);
+      return toStatus(params.limit, bucket.timestamps, params.windowMs, params.now, true);
+    }
+
+    bucket.timestamps.push(params.now);
+    bucket.timestamps.sort((left, right) => left - right);
+    this.buckets.set(params.key, bucket);
+    return toStatus(params.limit, bucket.timestamps, params.windowMs, params.now, false);
   }
 
-  const created = { timestamps: [] };
-  buckets.set(userId, created);
-  return created;
+  reset() {
+    this.buckets.clear();
+  }
 }
 
-function prune(now: number, timestamps: number[]): number[] {
-  const floor = now - WINDOW_MS;
-  return timestamps.filter((timestamp) => timestamp > floor);
+class RedisRateLimitStore implements RateLimitStore {
+  constructor(readonly redisUrl: string) {}
+
+  consume(_params: RateLimitConsumeParams): RateLimitStatus {
+    throw new Error(
+      `Redis-backed rate limiting is not implemented yet. Wire this store to ${this.redisUrl} with a shared counter script.`
+    );
+  }
 }
 
-function toStatus(limit: number, timestamps: number[], now: number): RateLimitStatus {
+function toStatus(
+  limit: number,
+  timestamps: number[],
+  windowMs: number,
+  now: number,
+  exceeded: boolean
+): RateLimitStatus {
   const remaining = Math.max(limit - timestamps.length, 0);
-  const resetAt = timestamps.length > 0 ? timestamps[0] + WINDOW_MS : now + WINDOW_MS;
-  const retryAfterSeconds = remaining > 0 ? 0 : Math.max(Math.ceil((resetAt - now) / 1000), 1);
+  const resetAt = timestamps.length > 0 ? timestamps[0] + windowMs : now + windowMs;
+  const retryAfterSeconds = exceeded ? Math.max(Math.ceil((resetAt - now) / 1000), 1) : 0;
 
   return {
     limit,
@@ -49,26 +79,43 @@ function toStatus(limit: number, timestamps: number[], now: number): RateLimitSt
   };
 }
 
+export function createRateLimitStore(options: {
+  mode?: 'memory' | 'redis';
+  redisUrl?: string;
+} = {}): RateLimitStore {
+  const mode = options.mode ?? 'memory';
+
+  if (mode === 'redis') {
+    if (!options.redisUrl) {
+      throw new Error('REDIS_URL is required when RATE_LIMIT_STORE=redis');
+    }
+
+    return new RedisRateLimitStore(options.redisUrl);
+  }
+
+  return new InMemoryRateLimitStore();
+}
+
+const defaultStore = createRateLimitStore({
+  mode: process.env.RATE_LIMIT_STORE === 'redis' ? 'redis' : 'memory',
+  redisUrl: process.env.REDIS_URL
+});
+
 export function consumeRateLimit(auth: AuthContext, now = Date.now()): RateLimitStatus {
   const limit = PLAN_LIMITS[auth.plan] ?? PLAN_LIMITS.free;
-  const bucket = getBucket(auth.userId);
-  bucket.timestamps = prune(now, bucket.timestamps);
+  const status = defaultStore.consume({
+    key: auth.userId,
+    limit,
+    windowMs: WINDOW_MS,
+    now
+  });
 
-  if (bucket.timestamps.length >= limit) {
-    const status = toStatus(limit, bucket.timestamps, now);
+  if (status.retryAfterSeconds > 0) {
     throw Object.assign(new Error('rate limit exceeded'), {
       code: 'RATE_LIMIT_EXCEEDED',
       status: 429,
       rateLimit: status
     });
-  }
-
-  bucket.timestamps.push(now);
-  bucket.timestamps.sort((left, right) => left - right);
-  const status = toStatus(limit, bucket.timestamps, now);
-
-  if (bucket.timestamps.length === 0) {
-    buckets.delete(auth.userId);
   }
 
   return status;
@@ -85,8 +132,8 @@ export function applyRateLimitHeaders(res: Response, status: RateLimitStatus) {
 }
 
 export function resetRateLimitsForTests() {
-  buckets.clear();
+  defaultStore.reset?.();
 }
 
-// In-memory rate limiting is intentionally simple for single-process development.
-// For production or horizontal scaling, move this shared state into Redis.
+// Memory mode is fine for local single-process development.
+// Set RATE_LIMIT_STORE=redis and REDIS_URL=redis://... once the Redis store is implemented for shared production state.

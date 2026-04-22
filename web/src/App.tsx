@@ -6,6 +6,7 @@ import {
   getConversationMessages,
   listConversations,
   makePayload,
+  RateLimitError,
   renameConversation,
   sendNonStream,
   sendStream,
@@ -31,6 +32,7 @@ import type {
   ChatMessage as ChatMessageData,
   ConversationSummary,
   Mode,
+  RateLimitStatus,
   StreamDoneEvent,
   TokenUsageSummary
 } from './types';
@@ -45,6 +47,37 @@ const COMMON_MODELS = [
 
 const NEW_CONVERSATION_TITLE = 'New conversation';
 
+function getRateLimitCountdownSeconds(rateLimit: RateLimitStatus | null, now: number): number | null {
+  if (!rateLimit) {
+    return null;
+  }
+
+  const resetAt = new Date(rateLimit.reset_at).getTime();
+  if (!Number.isFinite(resetAt)) {
+    return null;
+  }
+
+  return Math.max(Math.ceil((resetAt - now) / 1000), 0);
+}
+
+function formatRateLimitReset(rateLimit: RateLimitStatus | null, now: number): string | null {
+  const countdownSeconds = getRateLimitCountdownSeconds(rateLimit, now);
+  if (countdownSeconds === null) {
+    return null;
+  }
+
+  return countdownSeconds === 0 ? 'Resets now' : `Resets in about ${countdownSeconds}s`;
+}
+
+function toFriendlyRateLimitMessage(rateLimit: RateLimitStatus | null, fallback: string): string {
+  const retryAfterSeconds = rateLimit?.retry_after_seconds ?? getRateLimitCountdownSeconds(rateLimit, Date.now());
+  if (retryAfterSeconds && retryAfterSeconds > 0) {
+    return `Rate limit reached. Try again in ${retryAfterSeconds}s.`;
+  }
+
+  return fallback;
+}
+
 export default function App() {
   const [mode, setMode] = useState<Mode>('stream');
   const [model, setModel] = useState('auto');
@@ -53,6 +86,8 @@ export default function App() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessageData[]>([]);
   const [latestTokenUsage, setLatestTokenUsage] = useState<TokenUsageSummary | null>(null);
+  const [rateLimitStatus, setRateLimitStatus] = useState<RateLimitStatus | null>(null);
+  const [rateLimitNow, setRateLimitNow] = useState(() => Date.now());
   const [loading, setLoading] = useState(false);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
@@ -81,6 +116,8 @@ export default function App() {
       latestTokenUsage.usage?.total_tokens
     ].some((value) => typeof value === 'number');
   }, [latestTokenUsage]);
+  const rateLimitCountdownSeconds = useMemo(() => getRateLimitCountdownSeconds(rateLimitStatus, rateLimitNow), [rateLimitNow, rateLimitStatus]);
+  const rateLimitResetLabel = useMemo(() => formatRateLimitReset(rateLimitStatus, rateLimitNow), [rateLimitNow, rateLimitStatus]);
 
   const modelOptions = useMemo(() => {
     if (COMMON_MODELS.some((option) => option.value === model)) {
@@ -116,6 +153,21 @@ export default function App() {
       revalidationControllerRef.current?.abort();
     };
   }, []);
+
+  useEffect(() => {
+    if (!rateLimitStatus) {
+      return;
+    }
+
+    setRateLimitNow(Date.now());
+    const interval = window.setInterval(() => {
+      setRateLimitNow(Date.now());
+    }, 1_000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [rateLimitStatus]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: loading ? 'auto' : 'smooth', block: 'end' });
@@ -343,6 +395,7 @@ export default function App() {
       const history = [...messages];
       const nextUserMessages = [...history, { role: 'user' as const, content: prompt }];
       setLatestTokenUsage(null);
+      setRateLimitNow(Date.now());
       setMessages(nextUserMessages);
 
       if (mode === 'non-stream') {
@@ -360,6 +413,7 @@ export default function App() {
           context_tokens_used: result.raw.context_tokens_used ?? null,
           usage: result.raw.usage ?? null
         });
+        setRateLimitStatus(result.raw.rate_limit ?? null);
         const persistedNextMessages = [...nextUserMessages, { role: 'assistant' as const, content: result.text }];
         const visibleNextMessages = [
           ...nextUserMessages,
@@ -401,6 +455,7 @@ export default function App() {
               context_tokens_used: doneEvent.context_tokens_used ?? null,
               usage: doneEvent.usage ?? null
             });
+            setRateLimitStatus(doneEvent.rate_limit ?? null);
             setMessages((prev) => {
               const copy = [...prev];
               if (assistantIndex === -1) {
@@ -420,7 +475,20 @@ export default function App() {
         );
       }
     } catch (e: any) {
-      setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+      if (e instanceof RateLimitError || e?.status === 429) {
+        const rateLimit = e.rateLimit ?? null;
+        setRateLimitStatus(rateLimit);
+        setRateLimitNow(Date.now());
+        setMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            content: toFriendlyRateLimitMessage(rateLimit, 'Rate limit reached. Please wait a moment and try again.')
+          }
+        ]);
+      } else {
+        setMessages((prev) => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+      }
     } finally {
       setLoading(false);
     }
@@ -543,6 +611,21 @@ export default function App() {
 
             <div className="shrink-0 border-t border-border px-4 py-4">
               <div className="mx-auto w-full max-w-4xl">
+                {rateLimitStatus ? (
+                  <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                      Rate limit {rateLimitStatus.remaining}/{rateLimitStatus.limit} left
+                    </span>
+                    {rateLimitCountdownSeconds !== null && rateLimitCountdownSeconds > 0 && rateLimitStatus.remaining === 0 ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">
+                        Try again in {rateLimitCountdownSeconds}s
+                      </span>
+                    ) : null}
+                    {rateLimitResetLabel ? (
+                      <span className="rounded-full border border-border bg-secondary/50 px-3 py-1">{rateLimitResetLabel}</span>
+                    ) : null}
+                  </div>
+                ) : null}
                 {hasTokenUsage ? (
                   <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                     {typeof latestTokenUsage?.context_tokens_used === 'number' ? (

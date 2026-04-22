@@ -9,6 +9,17 @@ const apiMocks = vi.hoisted(() => ({
   getConversationMessages: vi.fn(),
   listConversations: vi.fn(),
   makePayload: vi.fn(),
+  RateLimitError: class RateLimitError extends Error {
+    status: number;
+    rateLimit: unknown;
+
+    constructor(message: string, status = 429, rateLimit: unknown = null) {
+      super(message);
+      this.name = 'RateLimitError';
+      this.status = status;
+      this.rateLimit = rateLimit;
+    }
+  },
   renameConversation: vi.fn(),
   sendNonStream: vi.fn(),
   sendStream: vi.fn(),
@@ -349,5 +360,62 @@ describe('App conversation workspace', () => {
     expect(screen.getByText('Prompt 12')).toBeInTheDocument();
     expect(screen.getByText('Completion 5')).toBeInTheDocument();
     expect(screen.getByText('Total 17')).toBeInTheDocument();
+  });
+
+  it('shows the latest per-user rate limit status after a successful send', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.sendNonStream.mockResolvedValue({
+      text: 'rate limited but successful reply',
+      raw: {
+        message: { role: 'assistant', content: 'rate limited but successful reply' },
+        usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+        context_tokens_used: 18,
+        rate_limit: {
+          limit: 60,
+          remaining: 59,
+          reset_at: new Date(Date.now() + 60_000).toISOString(),
+          retry_after_seconds: 0
+        }
+      }
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.click(document.getElementById('mode-select') as HTMLElement);
+    await user.click(screen.getByRole('option', { name: /non-stream/i }));
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Show rate limit status');
+    await user.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('rate limited but successful reply')).toBeInTheDocument();
+    expect(screen.getByText('Rate limit 59/60 left')).toBeInTheDocument();
+    expect(screen.getByText(/Resets in about 60s/i)).toBeInTheDocument();
+  });
+
+  it('handles 429 responses gracefully with a countdown instead of a raw error blob', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.sendNonStream.mockRejectedValue(
+      new apiMocks.RateLimitError('Too many requests', 429, {
+        limit: 60,
+        remaining: 0,
+        reset_at: new Date(Date.now() + 12_000).toISOString(),
+        retry_after_seconds: 12
+      })
+    );
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.click(document.getElementById('mode-select') as HTMLElement);
+    await user.click(screen.getByRole('option', { name: /non-stream/i }));
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Trigger a 429');
+    await user.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText(/Rate limit reached/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Try again in 12s/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('Rate limit 0/60 left')).toBeInTheDocument();
+    expect(screen.queryByText(/Error:.*Too many requests/i)).not.toBeInTheDocument();
   });
 });

@@ -50,6 +50,7 @@ export interface ChatRequest {
   mode: Mode;
   session_id: string;
   conversation_id?: string;
+  user_id: string;
   trace_id: string;
   temperature?: number;
 }
@@ -84,20 +85,4 @@ export interface CachedConversationRecord {
   messages: ChatMessage[];
   contentText: string;
   lastViewedAt: number;
-}
-
-
-export interface UserProfile {
-  id: string;
-  email: string;
-  plan: 'free' | 'pro';
-}
-
-export interface UsageSummary {
-  today_tokens: number;
-  month_tokens: number;
-  total_tokens: number;
-  daily_quota: number;
-  remaining_tokens: number;
-  plan: 'free' | 'pro';
 }

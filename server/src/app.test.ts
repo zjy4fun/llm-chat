@@ -4,8 +4,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
-import { initDb, closeDb, getConversationMessages } from './core/db.js';
+import { initDb, closeDb, getConversationMessages, getUserById, type DB } from './core/db.js';
 import { resetRateLimitsForTests } from './core/rate-limit.js';
+import { issueAuthTokens } from './core/auth.js';
 import type { ChatMessage } from './types/chat.js';
 import type { ProviderCompletion, ProviderStreamResult } from './types/provider.js';
 import type { ProviderParams } from './core/provider.js';
@@ -66,41 +67,52 @@ afterEach(() => {
   resetRateLimitsForTests();
 });
 
+function createAuthHeader(db: DB): string {
+  const user = getUserById(db, 'u_001');
+  if (!user) {
+    throw new Error('Missing seeded user u_001 in tests');
+  }
+
+  const tokens = issueAuthTokens(db, user);
+  return `Bearer ${tokens.access_token}`;
+}
+
+
 describe('conversation persistence routes', () => {
   it('creates, renames, lists, loads and deletes conversations', async () => {
     const { app, db, dir } = setupTestApp();
 
     try {
-      const createRes = await request(app).post('/conversations').send({
-        user_id: 'u_001',
-        first_message: 'How do I persist chat history in sqlite?'
+      const authHeader = createAuthHeader(db);
+      const createRes = await request(app).post('/conversations').set('Authorization', authHeader).send({
+                first_message: 'How do I persist chat history in sqlite?'
       });
 
       expect(createRes.status).toBe(201);
       expect(createRes.body.conversation.title).toBe('How do I persist chat history in sqlite?');
 
       const id = createRes.body.conversation.id;
-      const renameRes = await request(app).patch(`/conversations/${id}`).send({
-        user_id: 'u_001',
-        title: 'SQLite history guide'
+      const renameRes = await request(app).patch(`/conversations/${id}`).set('Authorization', authHeader).send({
+                title: 'SQLite history guide'
       });
       expect(renameRes.status).toBe(200);
       expect(renameRes.body.conversation.title).toBe('SQLite history guide');
 
-      const listRes = await request(app).get('/conversations').query({ user_id: 'u_001', page: 1, page_size: 10 });
+      const listRes = await request(app).get('/conversations').set('Authorization', authHeader).query({ page: 1, page_size: 10 });
       expect(listRes.status).toBe(200);
       expect(listRes.body.items).toHaveLength(1);
       expect(listRes.body.items[0].title).toBe('SQLite history guide');
 
       const messagesRes = await request(app)
         .get(`/conversations/${id}/messages`)
-        .query({ user_id: 'u_001' });
+        .set('Authorization', authHeader).query({});
       expect(messagesRes.status).toBe(200);
       expect(messagesRes.body.items).toEqual([]);
 
       const deleteRes = await request(app)
         .delete(`/conversations/${id}`)
-        .send({ user_id: 'u_001' });
+        .set('Authorization', authHeader)
+        .send({});
       expect(deleteRes.status).toBe(204);
     } finally {
       closeDb(db);
@@ -112,16 +124,17 @@ describe('conversation persistence routes', () => {
     const { app, db, dir } = setupTestApp();
 
     try {
+      const authHeader = createAuthHeader(db);
       const response = await request(app)
         .post('/chat/stream')
+        .set('Authorization', authHeader)
         .set('Accept', 'text/event-stream')
         .send({
           messages: [{ role: 'user', content: 'Stream this reply please.' }],
           model: 'auto',
           mode: 'stream',
           session_id: 'stream-session',
-          user_id: 'u_001',
-          trace_id: 'trace-stream'
+                    trace_id: 'trace-stream'
         });
 
       expect(response.status).toBe(200);
@@ -130,7 +143,7 @@ describe('conversation persistence routes', () => {
 
       const messagesRes = await request(app)
         .get('/conversations/stream-session/messages')
-        .query({ user_id: 'u_001' });
+        .set('Authorization', authHeader).query({});
       expect(messagesRes.status).toBe(200);
       expect(messagesRes.body.items.map((item: any) => item.content)).toEqual([
         'Stream this reply please.',
@@ -146,21 +159,21 @@ describe('conversation persistence routes', () => {
     const { app, db, dir } = setupTestApp();
 
     try {
+      const authHeader = createAuthHeader(db);
       const firstTurn: ChatMessage[] = [{ role: 'user', content: 'Explain sqlite persistence strategy in one sentence.' }];
-      const firstRes = await request(app).post('/chat').send({
+      const firstRes = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: firstTurn,
         model: 'auto',
         mode: 'non-stream',
         session_id: 'session-1',
-        user_id: 'u_001',
-        trace_id: 'trace-1'
+                trace_id: 'trace-1'
       });
 
       expect(firstRes.status).toBe(200);
       expect(firstRes.body.conversation_id).toBe('session-1');
       expect(firstRes.body.message.content).toBe('Persisted reply');
 
-      const listRes = await request(app).get('/conversations').query({ user_id: 'u_001', page: 1, page_size: 10 });
+      const listRes = await request(app).get('/conversations').set('Authorization', authHeader).query({ page: 1, page_size: 10 });
       expect(listRes.body.items).toHaveLength(1);
       expect(listRes.body.items[0]).toMatchObject({
         id: 'session-1',
@@ -173,20 +186,19 @@ describe('conversation persistence routes', () => {
         { role: 'assistant', content: 'Persisted reply' },
         { role: 'user', content: 'Add pagination too.' }
       ];
-      const secondRes = await request(app).post('/chat').send({
+      const secondRes = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: secondTurn,
         model: 'auto',
         mode: 'non-stream',
         session_id: 'session-1',
-        user_id: 'u_001',
-        trace_id: 'trace-2'
+                trace_id: 'trace-2'
       });
 
       expect(secondRes.status).toBe(200);
 
       const messagesRes = await request(app)
         .get('/conversations/session-1/messages')
-        .query({ user_id: 'u_001' });
+        .set('Authorization', authHeader).query({});
       expect(messagesRes.status).toBe(200);
       expect(messagesRes.body.items.map((item: any) => item.content)).toEqual([
         'Explain sqlite persistence strategy in one sentence.',
@@ -204,7 +216,8 @@ describe('conversation persistence routes', () => {
     const { app, db, dir } = setupTestApp();
 
     try {
-      const response = await request(app).post('/chat').send({
+      const authHeader = createAuthHeader(db);
+      const response = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: [
           { role: 'user', content: 'First persisted message.' },
           { role: 'assistant', content: 'Earlier reply.' },
@@ -213,8 +226,7 @@ describe('conversation persistence routes', () => {
         model: 'auto',
         mode: 'non-stream',
         session_id: 'context-session',
-        user_id: 'u_001',
-        trace_id: 'trace-context'
+                trace_id: 'trace-context'
       });
 
       expect(response.status).toBe(200);
@@ -258,7 +270,8 @@ describe('conversation persistence routes', () => {
     });
 
     try {
-      const response = await request(app).post('/chat').send({
+      const authHeader = createAuthHeader(db);
+      const response = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: [
           { role: 'user', content: 'Old message '.repeat(40) },
           { role: 'assistant', content: 'Old reply '.repeat(40) },
@@ -267,8 +280,7 @@ describe('conversation persistence routes', () => {
         model: 'gpt-4o-mini',
         mode: 'non-stream',
         session_id: 'trim-session',
-        user_id: 'u_001',
-        trace_id: 'trace-trim',
+                trace_id: 'trace-trim',
         max_tokens: 8
       });
 
@@ -288,13 +300,13 @@ describe('conversation persistence routes', () => {
     const { app, db, dir } = setupTestApp();
 
     try {
-      const response = await request(app).post('/chat').send({
+      const authHeader = createAuthHeader(db);
+      const response = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: [{ role: 'user', content: 'Check my remaining quota.' }],
         model: 'auto',
         mode: 'non-stream',
         session_id: 'rate-header-session',
-        user_id: 'u_001',
-        trace_id: 'trace-rate-header'
+                trace_id: 'trace-rate-header'
       });
 
       expect(response.status).toBe(200);
@@ -311,26 +323,25 @@ describe('conversation persistence routes', () => {
     const { app, db, dir } = setupTestApp();
 
     try {
+      const authHeader = createAuthHeader(db);
       for (let attempt = 0; attempt < 60; attempt += 1) {
-        const response = await request(app).post('/chat').send({
+        const response = await request(app).post('/chat').set('Authorization', authHeader).send({
           messages: [{ role: 'user', content: `Request ${attempt}` }],
           model: 'auto',
           mode: 'non-stream',
           session_id: `rate-limit-session-${attempt}`,
-          user_id: 'u_001',
-          trace_id: `trace-rate-limit-${attempt}`
+                    trace_id: `trace-rate-limit-${attempt}`
         });
 
         expect(response.status).toBe(200);
       }
 
-      const blockedResponse = await request(app).post('/chat').send({
+      const blockedResponse = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: [{ role: 'user', content: 'This one should be blocked.' }],
         model: 'auto',
         mode: 'non-stream',
         session_id: 'rate-limit-blocked-session',
-        user_id: 'u_001',
-        trace_id: 'trace-rate-limit-blocked'
+                trace_id: 'trace-rate-limit-blocked'
       });
 
       expect(blockedResponse.status).toBe(429);

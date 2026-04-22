@@ -77,11 +77,18 @@ export function issueAuthTokens(db: DB, user: UserRecord): { access_token: strin
 }
 
 function verifyToken(rawToken: string, secret: string): JWTPayload {
-  const parsed = jwt.verify(rawToken, secret, { issuer: 'llm-chat' }) as JWTPayload;
-  if (!parsed?.sub || !parsed?.type) {
-    throw new Error('invalid token');
+  try {
+    const parsed = jwt.verify(rawToken, secret, { issuer: 'llm-chat' }) as JWTPayload;
+    if (!parsed?.sub || !parsed?.type) {
+      throw new Error('invalid token payload');
+    }
+    return parsed;
+  } catch {
+    throw Object.assign(new Error('invalid or expired token'), {
+      status: 401,
+      code: 'AUTH_INVALID_TOKEN'
+    });
   }
-  return parsed;
 }
 
 export function authenticateAccessToken(db: DB, rawToken: string): AuthContext {
@@ -139,26 +146,9 @@ export function extractBearerToken(req: Request): string {
 export function requireAuth(db: DB) {
   return (req: Request, _res: Response, next: NextFunction) => {
     try {
-      const authHeader = req.headers.authorization;
-      if (authHeader?.startsWith('Bearer ')) {
-        const token = extractBearerToken(req);
-        req.auth = authenticateAccessToken(db, token);
-        next();
-        return;
-      }
-
-      const legacyUserId = (req.body?.user_id ?? req.query?.user_id) as string | undefined;
-      if (legacyUserId) {
-        const user = getUserById(db, legacyUserId);
-        if (!user || !user.active) {
-          throw Object.assign(new Error('user not found or inactive'), { status: 403, code: 'AUTH_INVALID_USER' });
-        }
-        req.auth = toAuthContext(user);
-        next();
-        return;
-      }
-
-      throw Object.assign(new Error('missing Bearer token'), { status: 401, code: 'AUTH_MISSING_TOKEN' });
+      const token = extractBearerToken(req);
+      req.auth = authenticateAccessToken(db, token);
+      next();
     } catch (error) {
       next(error);
     }

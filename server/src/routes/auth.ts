@@ -5,8 +5,7 @@ import { createUser, getUserByEmail, type DB } from '../core/db.js';
 
 const registerSchema = z.object({
   email: z.string().email(),
-  password: z.string().min(8),
-  plan: z.enum(['free', 'pro']).optional()
+  password: z.string().min(8)
 });
 
 const loginSchema = z.object({
@@ -33,8 +32,7 @@ export function createAuthRouter({ db }: { db: DB }) {
       const passwordHash = await hashPassword(input.password);
       const user = createUser(db, {
         email: input.email,
-        passwordHash,
-        plan: input.plan
+        passwordHash
       });
 
       const tokens = issueAuthTokens(db, user);

@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createApp } from './app.js';
 import { initDb, closeDb, getConversationMessages } from './core/db.js';
+import { resetRateLimitsForTests } from './core/rate-limit.js';
 import type { ChatMessage } from './types/chat.js';
 import type { ProviderCompletion, ProviderStreamResult } from './types/provider.js';
 import type { ProviderParams } from './core/provider.js';
@@ -62,7 +63,7 @@ function setupTestApp(overrides?: {
 }
 
 afterEach(() => {
-  // cleanup done inside each test
+  resetRateLimitsForTests();
 });
 
 describe('conversation persistence routes', () => {
@@ -234,7 +235,7 @@ describe('conversation persistence routes', () => {
   });
 
   it('truncates provider context with a sliding window but keeps the newest message', async () => {
-    process.env.LLM_MAX_CONTEXT_TOKENS = String(60);
+    process.env.LLM_MAX_CONTEXT_TOKENS='120';
     const calls: ChatMessage[][] = [];
     const { app, db, dir } = setupTestApp({
       provider: {
@@ -278,6 +279,67 @@ describe('conversation persistence routes', () => {
       expect(calls[0].some((message) => message.content.includes('Old message'))).toBe(false);
     } finally {
       delete process.env.LLM_MAX_CONTEXT_TOKENS;
+      closeDb(db);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('adds per-user rate limit headers on successful chat responses', async () => {
+    const { app, db, dir } = setupTestApp();
+
+    try {
+      const response = await request(app).post('/chat').send({
+        messages: [{ role: 'user', content: 'Check my remaining quota.' }],
+        model: 'auto',
+        mode: 'non-stream',
+        session_id: 'rate-header-session',
+        user_id: 'u_001',
+        trace_id: 'trace-rate-header'
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.headers['x-ratelimit-limit']).toBe('60');
+      expect(response.headers['x-ratelimit-remaining']).toBe('59');
+      expect(Number(response.headers['x-ratelimit-reset'])).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    } finally {
+      closeDb(db);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns 429 with retry-after and rate limit headers after a user exceeds the per-minute quota', async () => {
+    const { app, db, dir } = setupTestApp();
+
+    try {
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        const response = await request(app).post('/chat').send({
+          messages: [{ role: 'user', content: `Request ${attempt}` }],
+          model: 'auto',
+          mode: 'non-stream',
+          session_id: `rate-limit-session-${attempt}`,
+          user_id: 'u_001',
+          trace_id: `trace-rate-limit-${attempt}`
+        });
+
+        expect(response.status).toBe(200);
+      }
+
+      const blockedResponse = await request(app).post('/chat').send({
+        messages: [{ role: 'user', content: 'This one should be blocked.' }],
+        model: 'auto',
+        mode: 'non-stream',
+        session_id: 'rate-limit-blocked-session',
+        user_id: 'u_001',
+        trace_id: 'trace-rate-limit-blocked'
+      });
+
+      expect(blockedResponse.status).toBe(429);
+      expect(blockedResponse.body.code).toBe('RATE_LIMIT_EXCEEDED');
+      expect(blockedResponse.headers['retry-after']).toBeDefined();
+      expect(blockedResponse.headers['x-ratelimit-limit']).toBe('60');
+      expect(blockedResponse.headers['x-ratelimit-remaining']).toBe('0');
+      expect(Number(blockedResponse.headers['x-ratelimit-reset'])).toBeGreaterThan(Math.floor(Date.now() / 1000));
+    } finally {
       closeDb(db);
       fs.rmSync(dir, { recursive: true, force: true });
     }

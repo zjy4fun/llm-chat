@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { authGuard } from '../core/auth.js';
+import { applyRateLimitHeaders, consumeRateLimit } from '../core/rate-limit.js';
 import {
   appendMessages,
   ensureConversation,
@@ -51,7 +52,9 @@ export function createChatRouter({
     const begin = Date.now();
     try {
       const input = chatSchema.parse(req.body);
-      authGuard(input.user_id);
+      const auth = authGuard(input.user_id);
+      const rateLimit = consumeRateLimit(auth);
+      applyRateLimitHeaders(res, rateLimit);
 
       const needTools = shouldUseTools(input.messages);
       const selectedModel = chooseModel({
@@ -149,6 +152,9 @@ export function createChatRouter({
     } catch (error: any) {
       const status = error?.status || 400;
       const code = error?.code || 'CHAT_NON_STREAM_ERROR';
+      if (error?.rateLimit) {
+        applyRateLimitHeaders(res, error.rateLimit);
+      }
       logChat({
         traceId: req.body?.trace_id ?? 'unknown',
         userId: req.body?.user_id ?? 'unknown',

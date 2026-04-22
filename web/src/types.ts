@@ -17,9 +17,17 @@ export interface TokenUsageSummary {
   usage?: TokenUsage | null;
 }
 
+export interface RateLimitStatus {
+  limit: number;
+  remaining: number;
+  reset_at: string;
+  retry_after_seconds: number;
+}
+
 export interface NonStreamChatResponse extends TokenUsageSummary {
   message: ChatMessage;
   tool_messages?: ChatMessage[];
+  rate_limit?: RateLimitStatus;
 }
 
 export interface StreamToolEvent {
@@ -31,6 +39,7 @@ export interface StreamDoneEvent extends TokenUsageSummary {
   type?: 'done';
   text?: string;
   tool_messages?: ChatMessage[];
+  rate_limit?: RateLimitStatus;
 }
 
 export type Mode = 'stream' | 'non-stream';

@@ -6,11 +6,65 @@ import type {
   ConversationMessagesResponse,
   ConversationMutationResponse,
   NonStreamChatResponse,
+  RateLimitStatus,
   StreamDoneEvent,
   StreamToolEvent
 } from './types';
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8787';
+
+export class RateLimitError extends Error {
+  status: number;
+  rateLimit: RateLimitStatus | null;
+
+  constructor(message: string, status = 429, rateLimit: RateLimitStatus | null = null) {
+    super(message);
+    this.name = 'RateLimitError';
+    this.status = status;
+    this.rateLimit = rateLimit;
+  }
+}
+
+function parseRateLimitHeaders(headers: Headers): RateLimitStatus | null {
+  const limitHeader = headers.get('x-ratelimit-limit');
+  const remainingHeader = headers.get('x-ratelimit-remaining');
+  const resetHeader = headers.get('x-ratelimit-reset');
+
+  if (limitHeader === null || remainingHeader === null || resetHeader === null) {
+    return null;
+  }
+
+  const limit = Number(limitHeader);
+  const remaining = Number(remainingHeader);
+  const resetSeconds = Number(resetHeader);
+  const retryAfterHeader = headers.get('retry-after');
+  const retryAfterSeconds = retryAfterHeader === null ? 0 : Number(retryAfterHeader);
+
+  if (![limit, remaining, resetSeconds].every((value) => Number.isFinite(value))) {
+    return null;
+  }
+
+  return {
+    limit,
+    remaining,
+    reset_at: new Date(resetSeconds * 1000).toISOString(),
+    retry_after_seconds: Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : 0
+  };
+}
+
+async function buildRateLimitError(res: Response, fallbackMessage: string): Promise<RateLimitError> {
+  const text = await res.text();
+  let message = fallbackMessage;
+
+  try {
+    const parsed = JSON.parse(text) as { error?: string };
+    message = parsed.error || text || fallbackMessage;
+  } catch {
+    message = text || fallbackMessage;
+  }
+
+  return new RateLimitError(message, res.status, parseRateLimitHeaders(res.headers));
+}
 
 export async function sendNonStream(payload: ChatRequest): Promise<{ text: string; raw: NonStreamChatResponse }> {
   const res = await fetch(`${BASE_URL}/chat`, {
@@ -18,8 +72,14 @@ export async function sendNonStream(payload: ChatRequest): Promise<{ text: strin
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    if (res.status === 429) {
+      throw await buildRateLimitError(res, 'Rate limit reached');
+    }
+    throw new Error(await res.text());
+  }
   const data = (await res.json()) as NonStreamChatResponse;
+  data.rate_limit = parseRateLimitHeaders(res.headers) ?? data.rate_limit;
   return { text: data.message.content, raw: data };
 }
 
@@ -34,8 +94,12 @@ export async function sendStream(
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
     body: JSON.stringify(payload)
   });
+  const rateLimit = parseRateLimitHeaders(res.headers);
 
   if (!res.ok || !res.body) {
+    if (res.status === 429) {
+      throw await buildRateLimitError(res, 'Rate limit reached');
+    }
     throw new Error(await res.text());
   }
 
@@ -69,7 +133,7 @@ export async function sendStream(
       } else if (eventName === 'tool' && data.type === 'tool' && data.message) {
         onTool(data as StreamToolEvent);
       } else if (eventName === 'done') {
-        onDone(data as StreamDoneEvent);
+        onDone({ ...(data as StreamDoneEvent), rate_limit: rateLimit ?? undefined });
       } else if (eventName === 'error') {
         throw new Error(data.message || 'stream error');
       }

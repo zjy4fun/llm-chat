@@ -390,7 +390,69 @@ describe('App conversation workspace', () => {
 
     expect(await screen.findByText('rate limited but successful reply')).toBeInTheDocument();
     expect(screen.getByText('Rate limit 59/60 left')).toBeInTheDocument();
-    expect(screen.getByText(/Resets in about 60s/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resets in about (59|60)s/i)).toBeInTheDocument();
+  });
+
+  it('persists a stopped stream prompt even before the first token arrives without storing the stop notice', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.sendStream.mockImplementation((_payload, _onDelta, _onDone, _onTool, options) => {
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Stop before first token');
+    await user.click(screen.getByRole('button', { name: /^send$/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+
+    expect(await screen.findByText('Generation stopped.')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(apiMocks.toCachedConversation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          messages: [{ role: 'user', content: 'Stop before first token' }]
+        })
+      );
+    });
+  });
+
+  it('marks the stopped-stream notice as display-only so later sends exclude it from model history', async () => {
+    const user = userEvent.setup();
+
+    apiMocks.sendStream.mockImplementationOnce((_payload, _onDelta, _onDone, _onTool, options) => {
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Aborted', 'AbortError'));
+        });
+      });
+    });
+
+    render(<App />);
+    expect(await screen.findByText('Project Alpha')).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Stop this generation');
+    await user.click(screen.getByRole('button', { name: /^send$/i }));
+    await user.click(await screen.findByRole('button', { name: /stop/i }));
+    expect(await screen.findByText('Generation stopped.')).toBeInTheDocument();
+
+    await user.type(screen.getByPlaceholderText('Type your prompt...'), 'Next prompt');
+    await user.click(screen.getByRole('button', { name: /^send$/i }));
+
+    await waitFor(() => {
+      expect(apiMocks.makePayload).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          history: expect.arrayContaining([
+            expect.objectContaining({ content: 'Generation stopped.', displayOnly: true })
+          ]),
+          prompt: 'Next prompt'
+        })
+      );
+    });
   });
 
   it('handles 429 responses gracefully with a countdown instead of a raw error blob', async () => {

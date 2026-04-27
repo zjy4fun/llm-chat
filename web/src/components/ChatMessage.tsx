@@ -1,5 +1,5 @@
 import { Bot, LoaderCircle, Sparkles, UserRound } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { cn } from '@/lib/utils';
 import type { ChatMessage as ChatMessageData } from '@/types';
@@ -8,6 +8,16 @@ interface ChatMessageProps {
   isStreaming?: boolean;
   message: ChatMessageData;
 }
+
+const markdownComponents: Components = {
+  p: ({ children }) => <p className="mb-3 whitespace-pre-wrap last:mb-0">{children}</p>,
+  code: ({ children, className }) => (
+    <code className={cn('rounded bg-background/60 px-1 py-0.5 text-[13px]', className)}>{children}</code>
+  ),
+  pre: ({ children }) => (
+    <pre className="mb-3 overflow-x-auto rounded-lg bg-background/70 p-3 text-[13px] last:mb-0">{children}</pre>
+  )
+};
 
 export function ChatMessage({ isStreaming = false, message }: ChatMessageProps) {
   const isUser = message.role === 'user';
@@ -47,18 +57,7 @@ export function ChatMessage({ isStreaming = false, message }: ChatMessageProps) 
           </div>
         ) : (
           <div className="break-words text-[15px] leading-7">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                p: ({ children }) => <p className="mb-3 whitespace-pre-wrap last:mb-0">{children}</p>,
-                code: ({ children, className }) => (
-                  <code className={cn('rounded bg-background/60 px-1 py-0.5 text-[13px]', className)}>{children}</code>
-                ),
-                pre: ({ children }) => (
-                  <pre className="mb-3 overflow-x-auto rounded-lg bg-background/70 p-3 text-[13px] last:mb-0">{children}</pre>
-                )
-              }}
-            >
+            <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
               {message.content}
             </ReactMarkdown>
             {isStreaming && isAssistant ? (

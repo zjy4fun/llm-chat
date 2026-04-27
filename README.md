@@ -16,8 +16,15 @@ cp server/.env.example server/.env
 pnpm dev
 ```
 
+Mock development mode runs the mock OpenAI-compatible server, backend, and frontend together:
+
+```bash
+pnpm dev:mock
+```
+
 - Frontend: http://localhost:5173
 - Backend: http://localhost:8787
+- Mock LLM server: http://localhost:9000
 
 ## Request Format (Frontend → Backend)
 

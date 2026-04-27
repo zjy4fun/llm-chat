@@ -423,15 +423,21 @@ export default function App() {
 
     streamAbortControllerRef.current?.abort();
 
-    if (!streamConversationRef.current || !streamPendingUserMessagesRef.current || !streamTextRef.current) {
+    if (!streamConversationRef.current || !streamPendingUserMessagesRef.current) {
       return;
     }
 
-    flushStreamToState();
-    const persistedNextMessages = [
-      ...streamPendingUserMessagesRef.current,
-      { role: 'assistant' as const, content: streamTextRef.current }
-    ];
+    const persistedNextMessages = streamTextRef.current
+      ? [
+          ...streamPendingUserMessagesRef.current,
+          { role: 'assistant' as const, content: streamTextRef.current }
+        ]
+      : streamPendingUserMessagesRef.current;
+
+    if (streamTextRef.current) {
+      flushStreamToState();
+    }
+
     await updateConversationAfterSend(streamConversationRef.current, persistedNextMessages);
   };
 
@@ -520,7 +526,8 @@ export default function App() {
           ...prev,
           {
             role: 'assistant',
-            content: 'Generation stopped.'
+            content: 'Generation stopped.',
+            displayOnly: true
           }
         ]);
         return;

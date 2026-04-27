@@ -4,9 +4,10 @@ import path from 'node:path';
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
-import { closeDb, initDb } from './core/db.js';
+import { closeDb, getUserById, initDb, type DB } from './core/db.js';
 import type { ProviderCompletion, ProviderStreamChunk, ProviderStreamResult } from './types/provider.js';
 import type { ProviderParams } from './core/provider.js';
+import { issueAuthTokens } from './core/auth.js';
 
 function createStreamResult(chunks: ProviderStreamChunk[]): ProviderStreamResult {
   async function* iterate() {
@@ -31,6 +32,17 @@ function setupToolCallingApp(provider: {
   const app = createApp({ db, provider });
 
   return { app, db, dir };
+}
+
+
+function createAuthHeader(db: DB): string {
+  const user = getUserById(db, 'u_001');
+  if (!user) {
+    throw new Error('Missing seeded user u_001 in tests');
+  }
+
+  const tokens = issueAuthTokens(db, user);
+  return `Bearer ${tokens.access_token}`;
 }
 
 describe('tool calling loop', () => {
@@ -84,13 +96,13 @@ describe('tool calling loop', () => {
     const { app, db, dir } = setupToolCallingApp(provider);
 
     try {
-      const response = await request(app).post('/chat').send({
+      const authHeader = createAuthHeader(db);
+      const response = await request(app).post('/chat').set('Authorization', authHeader).send({
         messages: [{ role: 'user', content: 'What time is it in Shanghai right now?' }],
         model: 'auto',
         mode: 'non-stream',
         session_id: 'tool-session',
-        user_id: 'u_001',
-        trace_id: 'trace-tools-non-stream'
+                trace_id: 'trace-tools-non-stream'
       });
 
       expect(response.status).toBe(200);
@@ -179,16 +191,17 @@ describe('tool calling loop', () => {
     const { app, db, dir } = setupToolCallingApp(provider);
 
     try {
+      const authHeader = createAuthHeader(db);
       const response = await request(app)
         .post('/chat/stream')
+        .set('Authorization', authHeader)
         .set('Accept', 'text/event-stream')
         .send({
           messages: [{ role: 'user', content: 'What time is it, and also calculate 2+3*4.' }],
           model: 'auto',
           mode: 'stream',
           session_id: 'tool-stream-session',
-          user_id: 'u_001',
-          trace_id: 'trace-tools-stream'
+                    trace_id: 'trace-tools-stream'
         });
 
       expect(response.status).toBe(200);
@@ -271,16 +284,17 @@ describe('tool calling loop', () => {
     const { app, db, dir } = setupToolCallingApp(provider);
 
     try {
+      const authHeader = createAuthHeader(db);
       const response = await request(app)
         .post('/chat/stream')
+        .set('Authorization', authHeader)
         .set('Accept', 'text/event-stream')
         .send({
           messages: [{ role: 'user', content: 'Calculate 2+3*4 after deciding whether you need a tool.' }],
           model: 'auto',
           mode: 'stream',
           session_id: 'tool-stream-buffered-session',
-          user_id: 'u_001',
-          trace_id: 'trace-tools-stream-buffered'
+                    trace_id: 'trace-tools-stream-buffered'
         });
 
       expect(response.status).toBe(200);
@@ -315,16 +329,17 @@ describe('tool calling loop', () => {
     const { app, db, dir } = setupToolCallingApp(provider);
 
     try {
+      const authHeader = createAuthHeader(db);
       const response = await request(app)
         .post('/chat/stream')
+        .set('Authorization', authHeader)
         .set('Accept', 'text/event-stream')
         .send({
           messages: [{ role: 'user', content: 'Write a short greeting with no tools.' }],
           model: 'auto',
           mode: 'stream',
           session_id: 'tool-stream-no-tools-session',
-          user_id: 'u_001',
-          trace_id: 'trace-tools-stream-no-tools'
+                    trace_id: 'trace-tools-stream-no-tools'
         });
 
       expect(response.status).toBe(200);

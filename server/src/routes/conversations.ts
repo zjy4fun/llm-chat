@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { authGuard } from '../core/auth.js';
 import {
   createConversation,
   deleteConversation,
@@ -13,23 +12,16 @@ import {
 } from '../core/db.js';
 
 const createConversationSchema = z.object({
-  user_id: z.string().min(1),
   title: z.string().trim().optional(),
   first_message: z.string().trim().optional()
 });
 
 const listConversationsSchema = z.object({
-  user_id: z.string().min(1),
   page: z.coerce.number().int().min(1).default(1),
   page_size: z.coerce.number().int().min(1).max(100).default(20)
 });
 
-const conversationAccessSchema = z.object({
-  user_id: z.string().min(1)
-});
-
 const renameConversationSchema = z.object({
-  user_id: z.string().min(1),
   title: z.string().trim().min(1)
 });
 
@@ -38,11 +30,12 @@ export function createConversationRouter({ db }: { db: DB }) {
 
   router.post('/', (req, res) => {
     try {
-      const input = createConversationSchema.parse(req.body);
-      authGuard(input.user_id);
+      const userId = req.auth?.userId;
+      if (!userId) throw Object.assign(new Error('unauthorized'), { status: 401 });
 
+      const input = createConversationSchema.parse(req.body);
       const conversation = createConversation(db, {
-        userId: input.user_id,
+        userId,
         title: input.title || generateConversationTitle(input.first_message)
       });
 
@@ -54,10 +47,11 @@ export function createConversationRouter({ db }: { db: DB }) {
 
   router.get('/', (req, res) => {
     try {
+      const userId = req.auth?.userId;
+      if (!userId) throw Object.assign(new Error('unauthorized'), { status: 401 });
       const input = listConversationsSchema.parse(req.query);
-      authGuard(input.user_id);
       res.json(listConversations(db, {
-        userId: input.user_id,
+        userId,
         page: input.page,
         pageSize: input.page_size
       }));
@@ -68,12 +62,12 @@ export function createConversationRouter({ db }: { db: DB }) {
 
   router.get('/:id/messages', (req, res) => {
     try {
-      const access = conversationAccessSchema.parse(req.query);
-      authGuard(access.user_id);
+      const userId = req.auth?.userId;
+      if (!userId) throw Object.assign(new Error('unauthorized'), { status: 401 });
 
       const conversation = getConversation(db, {
         conversationId: req.params.id,
-        userId: access.user_id
+        userId
       });
 
       if (!conversation) {
@@ -85,7 +79,7 @@ export function createConversationRouter({ db }: { db: DB }) {
         conversation,
         items: getConversationMessages(db, {
           conversationId: req.params.id,
-          userId: access.user_id
+          userId
         })
       });
     } catch (error: any) {
@@ -95,12 +89,13 @@ export function createConversationRouter({ db }: { db: DB }) {
 
   router.patch('/:id', (req, res) => {
     try {
+      const userId = req.auth?.userId;
+      if (!userId) throw Object.assign(new Error('unauthorized'), { status: 401 });
       const input = renameConversationSchema.parse(req.body);
-      authGuard(input.user_id);
 
       const conversation = getConversation(db, {
         conversationId: req.params.id,
-        userId: input.user_id
+        userId
       });
       if (!conversation) {
         res.status(404).json({ error: 'conversation not found' });
@@ -109,14 +104,14 @@ export function createConversationRouter({ db }: { db: DB }) {
 
       updateConversationTitle(db, {
         conversationId: req.params.id,
-        userId: input.user_id,
+        userId,
         title: input.title
       });
 
       res.json({
         conversation: getConversation(db, {
           conversationId: req.params.id,
-          userId: input.user_id
+          userId
         })
       });
     } catch (error: any) {
@@ -126,14 +121,12 @@ export function createConversationRouter({ db }: { db: DB }) {
 
   router.delete('/:id', (req, res) => {
     try {
-      const access = conversationAccessSchema.parse({
-        user_id: req.body?.user_id ?? req.query?.user_id
-      });
-      authGuard(access.user_id);
+      const userId = req.auth?.userId;
+      if (!userId) throw Object.assign(new Error('unauthorized'), { status: 401 });
 
       const deleted = deleteConversation(db, {
         conversationId: req.params.id,
-        userId: access.user_id
+        userId
       });
 
       if (!deleted) {

@@ -4,13 +4,19 @@
   "version": "0.1.0",
   "packageManager": "pnpm@10.0.0",
   "scripts": {
-    "dev": "pnpm -r --parallel dev",
+    "dev": "concurrently -k -n server,web -c cyan,green \"pnpm --filter llm-chat-server dev\" \"pnpm --filter llm-chat-web dev\"",
     "build": "pnpm -r build",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test",
+    "dev:mock": "concurrently -k -n mock,server,web -c magenta,cyan,green \"pnpm --filter llm-chat-server mock\" \"cross-env LLM_BASE_URL=http://localhost:9000/v1 LLM_API_KEY=mock pnpm --filter llm-chat-server dev\" \"pnpm --filter llm-chat-web dev\"",
+    "mock": "pnpm --filter llm-chat-server mock"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
       "better-sqlite3"
     ]
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0"
   }
 }

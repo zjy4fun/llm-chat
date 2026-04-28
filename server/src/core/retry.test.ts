@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { __resetCircuitBreakerForTests, getBackoffDelayMs, retryWithBackoff } from './retry.js';
+import { __getCircuitBreakerSizeForTests, __resetCircuitBreakerForTests, getBackoffDelayMs, retryWithBackoff } from './retry.js';
 
 describe('retryWithBackoff', () => {
   it('retries transient errors and eventually succeeds', async () => {
@@ -38,7 +38,7 @@ describe('retryWithBackoff', () => {
             initialDelayMs: 1,
             backoffFactor: 2,
             maxDelayMs: 10,
-            shouldRetry: () => false,
+            shouldRetry: () => true,
             circuitKey: 'provider:test-model',
             now
           }
@@ -60,6 +60,72 @@ describe('retryWithBackoff', () => {
         }
       )
     ).rejects.toMatchObject({ code: 'CIRCUIT_BREAKER_OPEN' });
+  });
+
+  it('does not count non-retriable terminal errors toward opening the circuit breaker', async () => {
+    __resetCircuitBreakerForTests();
+
+    const now = vi.fn(() => 1_000);
+    const nonRetriableError = Object.assign(new Error('bad request'), { status: 400 });
+
+    for (let i = 0; i < 6; i += 1) {
+      await expect(
+        retryWithBackoff(
+          () => Promise.reject(nonRetriableError),
+          {
+            maxRetries: 3,
+            initialDelayMs: 1,
+            backoffFactor: 2,
+            maxDelayMs: 10,
+            shouldRetry: () => false,
+            circuitKey: 'provider:test-model',
+            now
+          }
+        )
+      ).rejects.toThrow('bad request');
+    }
+
+    await expect(
+      retryWithBackoff(
+        () => Promise.resolve('ok'),
+        {
+          maxRetries: 0,
+          initialDelayMs: 1,
+          backoffFactor: 2,
+          maxDelayMs: 10,
+          shouldRetry: () => false,
+          circuitKey: 'provider:test-model',
+          now
+        }
+      )
+    ).resolves.toBe('ok');
+  });
+
+  it('bounds circuit breaker entries by evicting old keys', async () => {
+    __resetCircuitBreakerForTests();
+
+    let currentTime = 1_000;
+    const now = vi.fn(() => currentTime);
+
+    for (let i = 0; i < 1_005; i += 1) {
+      currentTime += 1;
+      await expect(
+        retryWithBackoff(
+          () => Promise.reject(new Error('downstream failure')),
+          {
+            maxRetries: 0,
+            initialDelayMs: 1,
+            backoffFactor: 2,
+            maxDelayMs: 10,
+            shouldRetry: () => true,
+            circuitKey: `provider:test-model-${i}`,
+            now
+          }
+        )
+      ).rejects.toThrow('downstream failure');
+    }
+
+    expect(__getCircuitBreakerSizeForTests()).toBeLessThanOrEqual(1_000);
   });
 
   it('caps backoff delay at configured max delay', () => {

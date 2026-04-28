@@ -137,19 +137,31 @@ export function createChatStreamRouter({
             let text = '';
             let usage: ProviderUsage = {};
 
-            for await (const chunk of stream) {
-              const delta = chunk.choices?.[0]?.delta?.content ?? '';
-              if (delta) {
-                text += delta;
-                sendSSE(res, 'message', {
-                  type: 'delta',
-                  text: delta,
-                  trace_id: input?.trace_id
-                });
-              }
+            try {
+              for await (const chunk of stream) {
+                const delta = chunk.choices?.[0]?.delta?.content ?? '';
+                if (delta) {
+                  text += delta;
+                  sendSSE(res, 'message', {
+                    type: 'delta',
+                    text: delta,
+                    trace_id: input?.trace_id
+                  });
+                }
 
-              if (chunk.usage) {
-                usage = chunk.usage;
+                if (chunk.usage) {
+                  usage = chunk.usage;
+                }
+              }
+            } catch (streamError: any) {
+              if (text.length > 0) {
+                sendSSE(res, 'error', {
+                  type: 'error',
+                  code: streamError?.code ?? 'STREAM_PARTIAL_RESPONSE',
+                  message: streamError?.message ?? 'stream interrupted, returned partial response'
+                });
+              } else {
+                throw streamError;
               }
             }
 
